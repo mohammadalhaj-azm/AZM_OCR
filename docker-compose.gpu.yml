@@ -1,0 +1,56 @@
+# NVIDIA GPU server (e.g. AWS g6, L4 24 GB). Adds to docker-compose.yml; needs nvidia-container-toolkit on the host.
+#   Ollama (qwen3 text + vision) and the experimental handwriting model run on the GPU; PaddleOCR stays on the CPU.
+#
+# Use it by putting this line in .env (then plain `docker compose ...` commands pick up both files):
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+#
+#   docker compose --profile setup run --rm ollama-pull        # one-time: qwen3 models (needs internet)
+#   docker compose build
+#   docker compose --profile setup run --rm handwriting-pull   # one-time: handwriting model, ~7.5 GB (needs internet)
+#   docker compose up -d
+#
+# VRAM: Ollama keeps one model loaded (OLLAMA_MAX_LOADED_MODELS=1) next to the handwriting model once it is loaded.
+# Check the real usage with nvidia-smi before raising OLLAMA_MAX_LOADED_MODELS.
+
+x-gpu: &gpu
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: all
+          capabilities: [gpu]
+
+services:
+  ollama:
+    deploy: *gpu
+
+  app:
+    build:
+      context: .
+      args:
+        UV_EXTRA: handwriting-cuda
+    image: ocr-id-service-app:gpu
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility  # utility = NVML, for the admin dashboard's GPU panel
+    volumes:
+      - hf-models:/opt/hf
+    deploy: *gpu
+
+  # One-time download of the handwriting model into the hf-models volume. Same image as `app`, but on a network
+  # with internet access and with HF_HUB_OFFLINE turned off for this command only; `app` stays offline.
+  handwriting-pull:
+    image: ocr-id-service-app:gpu
+    pull_policy: never  # built by `docker compose build` (the app service)
+    profiles: [setup]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HF_HUB_OFFLINE: "0"
+    volumes:
+      - hf-models:/opt/hf
+    networks: [edge]
+    command: ["uv", "run", "--no-sync", "python", "-m", "app.cli", "download-handwriting-model"]
+
+volumes:
+  hf-models: {}

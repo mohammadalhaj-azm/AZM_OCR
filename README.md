@@ -779,10 +779,12 @@ below, on your own hand-checked samples.
 
 ### Set up and call it
 ```powershell
-uv sync --extra handwriting                          # torch (CPU build) + transformers; not in the Docker image
+uv sync --extra handwriting                          # torch (CPU build) + transformers (GPU: --extra handwriting-cuda)
 uv run python -m app.cli download-handwriting-model  # ~7.5 GB into the Hugging Face cache (needs internet, once)
 ```
-Note: a plain `uv sync` (without `--extra handwriting`) removes torch and transformers again.
+Note: a plain `uv sync` (without `--extra handwriting`) removes torch and transformers again. On a Linux NVIDIA
+server use `--extra handwriting-cuda` instead (CUDA 12.6 torch; the two extras can't be installed together). In
+Docker, only the GPU setup (`docker-compose.gpu.yml`, see [Docker deployment](#docker-deployment)) includes it.
 Then set `HANDWRITING_ENABLED=true` in `.env`, start the service, and check `GET /health/handwriting`
 (`depsInstalled`, `modelDownloaded`, `loaded`). The model loads on the first request (or at startup with
 `HANDWRITING_WARMUP=true`); on CPU it needs about 15 GB of RAM (float32).
@@ -882,7 +884,11 @@ curl http://127.0.0.1:8000/health
 - **`/tmp` is a `tmpfs` (RAM)**, so temp files and `UPLOAD_DIR` never touch persistent disk. The API is published on
   `127.0.0.1:8000`; change the host IP in `docker-compose.yml` to expose it.
 - The container `HEALTHCHECK` uses `/health/ready`, so an Ollama outage doesn't mark the app unhealthy.
-- **NVIDIA GPU for Ollama:** uncomment the `deploy:` block (needs nvidia-container-toolkit on the host).
+- **NVIDIA GPU server:** add `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml` to `.env`. Ollama and the
+  handwriting model then run on the GPU (PaddleOCR stays on the CPU), the image is built with
+  `UV_EXTRA=handwriting-cuda`, and a one-time `docker compose --profile setup run --rm handwriting-pull` puts the
+  handwriting model into the `hf-models` volume. Step by step for AWS EC2 g6 on Ubuntu 22.04, including host setup
+  (`scripts/ec2_setup.sh`) and `.env` generation (`scripts/make_env.py`): [docs/DEPLOY-EC2.md](docs/DEPLOY-EC2.md).
 - These files were written without Docker available on the development machine, so **run the build once** on the target host.
 
 ## Switching the LLM to vLLM on a GPU server

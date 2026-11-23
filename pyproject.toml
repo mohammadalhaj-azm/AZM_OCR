@@ -25,24 +25,45 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Experimental handwriting OCR, in-process backend (HANDWRITING_BACKEND=transformers): uv sync --extra handwriting.
-# Not in the Docker image. torch comes from the PyTorch CPU index (see [tool.uv.sources]); for an NVIDIA GPU point
-# it at a CUDA index instead, e.g. https://download.pytorch.org/whl/cu128.
+# Experimental handwriting OCR, in-process backend (HANDWRITING_BACKEND=transformers). Two variants of the same
+# packages, differing only in the torch build (see [tool.uv.sources]); they can't be installed together:
+#   uv sync --extra handwriting        # CPU torch (laptop)
+#   uv sync --extra handwriting-cuda   # CUDA 12.6 torch, Linux + NVIDIA GPU (GPU Docker image: docker-compose.gpu.yml)
 handwriting = [
     "accelerate>=1.10",
     "torch>=2.8",
     "torchvision>=0.23",  # the model's fast image processor (Qwen2VLImageProcessorFast) needs it
     "transformers>=5,<6",  # checkpoint saved with 4.57.1; v4 would downgrade huggingface-hub for the whole app
 ]
+handwriting-cuda = [
+    "accelerate>=1.10",
+    "torch>=2.8",
+    "torchvision>=0.23",
+    "transformers>=5,<6",
+]
+
+[tool.uv]
+conflicts = [[{ extra = "handwriting" }, { extra = "handwriting-cuda" }]]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
 [tool.uv.sources]
-torch = [{ index = "pytorch-cpu" }]
-torchvision = [{ index = "pytorch-cpu" }]
+torch = [
+    { index = "pytorch-cpu", extra = "handwriting" },
+    { index = "pytorch-cu126", extra = "handwriting-cuda" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "handwriting" },
+    { index = "pytorch-cu126", extra = "handwriting-cuda" },
+]
 
 [dependency-groups]
 dev = [
