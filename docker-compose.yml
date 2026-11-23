@@ -1,0 +1,97 @@
+# Deployment: service + Ollama. Not needed for local development.
+#
+#   cp .env.example .env                                   # set API_KEYS, POSTGRES_PASSWORD, RESULT_ENCRYPTION_KEY
+#   (the image runs with ENVIRONMENT=production: it refuses to start with placeholder or missing secrets)
+#   docker compose --profile setup run --rm ollama-pull    # one-time model download (needs internet)
+#   docker compose up -d --build
+#   curl http://127.0.0.1:8000/health
+#
+# Ollama and PostgreSQL sit on an internal-only network: at runtime they have no internet access at all.
+name: ocr-id-service
+
+services:
+  ollama:
+    image: ollama/ollama:0.40.16
+    environment:
+      OLLAMA_NO_CLOUD: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_KEEP_ALIVE: "30m"
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [internal]
+    restart: unless-stopped
+    # NVIDIA GPU (requires nvidia-container-toolkit on the host): uncomment.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ocr
+      POSTGRES_DB: ocr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    # No statement logging: queries carry (sealed) document data as parameters.
+    command: ["postgres", "-c", "log_statement=none", "-c", "log_min_error_statement=panic"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [internal]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocr -d ocr"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    platform: linux/amd64
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LLM_BASE_URL: http://ollama:11434/v1
+      UPLOAD_DIR: /tmp/ocr-id-service
+      JOB_STORE: postgres
+      DATABASE_URL: postgresql://ocr:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/ocr
+    # Client registry: put CLIENTS_FILE=/app/config/clients.yaml and the clients' webhook secret variables in .env,
+    # and mount the file (it holds only key hashes, no secrets):
+    # Admin dashboard (/admin): put ADMIN_USERS_FILE=/app/config/admins.yaml and ADMIN_SESSION_SECRET in .env, and mount
+    # the users file (it holds only password hashes, no secrets). Keep /admin on an internal network.
+    # volumes:
+    #   - ./config/clients.yaml:/app/config/clients.yaml:ro
+    #   - ./config/admins.yaml:/app/config/admins.yaml:ro
+    # For the accuracy panel, also mount an eval run folder and set EVAL_OUT_DIR (eval/ is not in the image).
+    tmpfs:
+      - /tmp:mode=1777  # temp files and UPLOAD_DIR live in RAM only, never on persistent disk
+    ports:
+      - "127.0.0.1:8000:8000"  # change the host IP to expose it to other machines
+    networks: [internal, edge]
+    depends_on:
+      ollama:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # One-time model download. Same volume as `ollama`, but on a network with internet access.
+  ollama-pull:
+    image: ollama/ollama:0.40.16
+    profiles: [setup]
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [edge]
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull qwen3:8b && ollama pull qwen3-vl:8b-instruct"]
+
+networks:
+  internal:
+    internal: true  # no route to the internet
+  edge: {}
+
+volumes:
+  ollama-models: {}
+  postgres-data: {}

@@ -1,0 +1,56 @@
+[project]
+name = "ocr-id-service"
+version = "0.4.0"  # = app.__version__
+description = "Local, privacy-first OCR + identity-document detection service"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "cryptography>=44",
+    "fastapi>=0.165.0",
+    "httpx>=0.28.1",
+    "numpy>=2.3.5",
+    "nvidia-ml-py>=12.570",
+    "paddleocr>=3.7,<3.8",
+    "paddlepaddle==3.2.0",
+    "pillow>=13.0.0",
+    "prometheus-client>=0.21",
+    "psutil>=7.0",
+    "psycopg[binary,pool]>=3.2",
+    "pydantic-settings>=2.16.3",
+    "pypdfium2>=5.15.2",
+    "python-docx>=1.2.0",
+    "python-dotenv>=1.2",
+    "python-multipart>=0.0.34",
+    "pyyaml>=6.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.optional-dependencies]
+# Experimental handwriting OCR, in-process backend (HANDWRITING_BACKEND=transformers): uv sync --extra handwriting.
+# Not in the Docker image. torch comes from the PyTorch CPU index (see [tool.uv.sources]); for an NVIDIA GPU point
+# it at a CUDA index instead, e.g. https://download.pytorch.org/whl/cu128.
+handwriting = [
+    "accelerate>=1.10",
+    "torch>=2.8",
+    "torchvision>=0.23",  # the model's fast image processor (Qwen2VLImageProcessorFast) needs it
+    "transformers>=5,<6",  # checkpoint saved with 4.57.1; v4 would downgrade huggingface-hub for the whole app
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]
+
+[dependency-groups]
+dev = [
+    "arabic-reshaper>=3.1.0",
+    "pytest>=9.2.0",
+    "python-bidi>=0.6.12",
+    "reportlab>=5.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

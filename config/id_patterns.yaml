@@ -1,0 +1,65 @@
+# ID-detection rules (no AI). Edit freely; the service reads this file at startup.
+#
+# Every signal has a weight in 0..1. Positive weights are combined with noisy-OR:
+#   score = 1 - (1 - w1) * (1 - w2) * ...
+# Negative keywords then scale the score down: score *= (1 - w) for each hit.
+# Keywords are matched on normalized text with spaces removed (OCR often drops spaces),
+# English case-insensitively. Arabic is normalized the same way as the text (أ->ا, ة->ه, ...).
+
+keywords:
+  # Arabic
+  - {text: "الرقم الوطني", weight: 0.35, doc_type: national_id}
+  - {text: "بطاقة شخصية", weight: 0.45, doc_type: national_id}
+  - {text: "بطاقة الهوية", weight: 0.45, doc_type: national_id}
+  - {text: "الهوية الوطنية", weight: 0.4, doc_type: national_id}
+  - {text: "جواز سفر", weight: 0.45, doc_type: passport}
+  - {text: "رخصة قيادة", weight: 0.45, doc_type: driver_license}
+  - {text: "رخصة سوق", weight: 0.45, doc_type: driver_license}
+  - {text: "إقامة", weight: 0.2, doc_type: residence_permit}  # weak: also "مكان الإقامة" on forms
+  - {text: "تصريح إقامة", weight: 0.4, doc_type: residence_permit}
+  - {text: "تاريخ الميلاد", weight: 0.15}
+  - {text: "مكان الولادة", weight: 0.15}
+  - {text: "محل الولادة", weight: 0.15}
+  - {text: "تاريخ الانتهاء", weight: 0.1}
+  # English
+  - {text: "PASSPORT", weight: 0.4, doc_type: passport}
+  - {text: "IDENTITY CARD", weight: 0.45, doc_type: national_id}
+  - {text: "NATIONAL ID", weight: 0.35, doc_type: national_id}
+  - {text: "DRIVING LICENCE", weight: 0.45, doc_type: driver_license}
+  - {text: "DRIVING LICENSE", weight: 0.45, doc_type: driver_license}
+  - {text: "DRIVER LICENSE", weight: 0.45, doc_type: driver_license}
+  - {text: "RESIDENCE PERMIT", weight: 0.45, doc_type: residence_permit}
+  - {text: "DATE OF BIRTH", weight: 0.15}
+  - {text: "PLACE OF BIRTH", weight: 0.15}
+  - {text: "NATIONALITY", weight: 0.15}
+  - {text: "EXPIRY", weight: 0.1}
+
+# Words typical of NON-ID documents. They lower the rule score; they don't decide on their own.
+negative_keywords:
+  - {text: "فاتورة", weight: 0.4}
+  - {text: "ضريبة", weight: 0.2}
+  - {text: "المبلغ", weight: 0.2}
+  - {text: "عقد", weight: 0.15}
+  - {text: "تحية طيبة", weight: 0.3}
+  - {text: "INVOICE", weight: 0.4}
+  - {text: "TOTAL", weight: 0.15}
+  - {text: "VAT", weight: 0.15}
+  - {text: "DEAR", weight: 0.3}
+  - {text: "REGARDS", weight: 0.3}
+
+# ID-number formats per country (ISO 3166 alpha-2). These are EXAMPLES: replace them with the
+# countries you actually process. Use (?<!\d) / (?!\d) instead of \b, because \b fails next to
+# Arabic letters when OCR drops a space. Patterns run on cleaned text (digits already 0-9).
+# Generic digit counts (e.g. "any 10 digits") also match phone/account numbers: keep them weak.
+countries:
+  AE:
+    - {name: "Emirates ID", pattern: '(?<!\d)784-?\d{4}-?\d{7}-?\d(?!\d)', weight: 0.35, doc_type: national_id}
+  EG:
+    - name: "Egyptian national ID (century, YYMMDD, 7 digits)"
+      pattern: '(?<!\d)[23]\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{7}(?!\d)'
+      weight: 0.25
+      doc_type: national_id
+  SA:
+    - {name: "Saudi ID / Iqama (1 = citizen, 2 = resident)", pattern: '(?<!\d)[12]\d{9}(?!\d)', weight: 0.1}
+  SY:
+    - {name: "Syrian national number (11 digits)", pattern: '(?<!\d)\d{11}(?!\d)', weight: 0.1, doc_type: national_id}

@@ -1,0 +1,33 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+
+# Virtual environments
+.venv
+
+# Local config / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data: uploads, results, model caches, eval output
+tmp/
+data/
+.cache/
+eval/out/
+
+# Never commit real documents. Only generated synthetic fixtures are allowed.
+*.pdf
+*.docx
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.tif
+*.tiff
+!tests/fixtures/synthetic/**

@@ -1,0 +1,8 @@
+# Admin dashboard users (ADMIN_USERS_FILE). Only scrypt password hashes, no secrets.
+# New password hash: .venv\Scripts\python.exe scripts\admin_user.py hash
+# Roles: admin (may change configuration, keys, delete jobs, acknowledge alerts) or viewer (read-only).
+admins:
+  admin:
+    name: "Administrator"
+    role: admin
+    password_scrypt: "scrypt$16384$8$1$BRv1CBhT8uDDiVxS2NxPnQ==$UCWL0XA7Z6WhesAzWZHVzA/uu5R2rQxCqrHOLwvxKdg="

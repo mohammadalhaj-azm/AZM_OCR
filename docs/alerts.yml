@@ -1,0 +1,92 @@
+# Example Prometheus alerting rules for the OCR service (README, "Metrics").
+#
+# Scrape GET /metrics of every replica (internal network only), e.g. as job="ocr", and load this file with
+# `rule_files:`. Adjust the thresholds to your volumes. Counters and histograms count each replica's own work: sum
+# them. The gauges read from the shared job store (ocr_jobs, ocr_queue_oldest_age_seconds,
+# ocr_processing_oldest_age_seconds, ocr_webhooks_pending) are the same on every replica: use max, never sum.
+# tests/test_api.py checks that every ocr_* metric used here exists.
+groups:
+  - name: ocr-service
+    rules:
+      - alert: OcrTargetDown
+        expr: up{job="ocr"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "OCR replica {{ $labels.instance }} can't be scraped (down, or /metrics disabled)"
+
+      - alert: OcrNotReady
+        expr: min by (instance) (ocr_dependency_up{dependency=~"store|ocr_models|worker"}) == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "OCR replica {{ $labels.instance }} is not ready: database, OCR models or job worker"
+
+      - alert: OcrLlmUnavailable
+        expr: max by (instance) (ocr_dependency_up{dependency="llm"}) == 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "The text LLM is unavailable to {{ $labels.instance }}: ID detection runs on rules only"
+
+      - alert: OcrLlmFallbacks
+        expr: sum by (stage) (increase(ocr_llm_fallbacks_total[15m])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "ID detection went on without the {{ $labels.stage }} model (failed or missing)"
+
+      - alert: OcrQueueBacklog
+        expr: max(ocr_queue_oldest_age_seconds) > 600
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "The oldest queued job has waited {{ $value | humanizeDuration }}: add replicas or workers"
+
+      - alert: OcrJobStuck
+        expr: max(ocr_processing_oldest_age_seconds) > 1800
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "A job has been processing for {{ $value | humanizeDuration }}: restart the replica holding it"
+
+      - alert: OcrJobFailureRate
+        expr: |
+          sum(rate(ocr_jobs_finished_total{status="failed"}[15m]))
+            / sum(rate(ocr_jobs_finished_total[15m])) > 0.1
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "More than 10% of jobs fail (see error codes in the audit trail, event job.failed)"
+
+      - alert: OcrServerErrors
+        expr: sum(rate(ocr_http_responses_total{status="500"}[5m])) > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Requests fail with 500 internal_error (logs: error= lines, by request_id)"
+
+      - alert: OcrLoadShedding
+        expr: sum by (client) (rate(ocr_http_responses_total{status="503"}[10m])) > 0.1
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Client {{ $labels.client }} keeps getting 503 queue_full / busy: raise its limits or capacity"
+
+      - alert: OcrWebhooksGivenUp
+        expr: sum by (client) (increase(ocr_webhooks_total{result="failed"}[1h])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "Webhooks to client {{ $labels.client }} were given up: its receiver is down or rejects them"
+
+      - alert: OcrWebhooksPiling
+        expr: max(ocr_webhooks_pending) > 100
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value }} webhook deliveries are waiting for their receivers"
+
+      - alert: OcrAuditWriteFailures
+        expr: sum(increase(ocr_audit_write_failures_total[10m])) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "Audit events could not be written (database?): the audit trail has gaps"

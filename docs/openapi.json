@@ -1,0 +1,1894 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OCR + ID detection",
+    "description": "Local, privacy-first text extraction (Arabic/English) and identity-document detection. All `/v1` endpoints need the `X-Api-Key` header. Every error has the shape `{\"error\": {\"code\", \"message\", \"requestId\"}}`; send `X-Request-Id` to correlate.",
+    "version": "0.4.0"
+  },
+  "paths": {
+    "/v1/documents": {
+      "post": {
+        "summary": "Upload a document (PDF, DOCX, JPG, PNG, WEBP, TIFF) for text extraction + ID detection (async job)",
+        "operationId": "upload_v1_documents_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Retry-safe uploads: the same key returns the same job (within RESULT_TTL_S)",
+              "title": "Idempotency-Key"
+            },
+            "description": "Retry-safe uploads: the same key returns the same job (within RESULT_TTL_S)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_v1_documents_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/extract": {
+      "post": {
+        "summary": "Extract text only (no ID detection, no LLM) and return it in the response",
+        "description": "Synchronous: the request waits for OCR (about 2-3 s per scanned page on CPU). Arabic, English and mixed documents. At most `EXTRACT_MAX_PAGES` pages; use `/v1/documents` for larger files. The file is processed in memory only.",
+        "operationId": "extract_text_v1_extract_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_extract_text_v1_extract_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request Entity Too Large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/handwriting": {
+      "post": {
+        "tags": [
+          "experimental"
+        ],
+        "summary": "Experimental: read handwritten text (Arabic first, English too) and return it",
+        "description": "Synchronous and slow (on CPU about a minute or more per page). Images (JPG, PNG, WEBP, TIFF) and PDFs, every page rendered; at most `HANDWRITING_MAX_PAGES` pages. One request at a time (503 `busy` otherwise). Pages without ink are skipped, not sent to the model. `confidence` is always null: the model gives no calibrated confidence. Separate from `/v1/extract`, and may change while it is evaluated. The file is processed in memory only.",
+        "operationId": "handwriting_v1_handwriting_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_handwriting_v1_handwriting_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandwritingResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request Entity Too Large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/jobs/{job_id}": {
+      "get": {
+        "summary": "Job status, and the result when done",
+        "description": "With `wait=N` (seconds, at most MAX_WAIT_S) the request is held until the job is done or failed, or N seconds pass (long-polling: no client-side polling loop needed).",
+        "operationId": "get_job_v1_jobs__job_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 3600,
+              "minimum": 0,
+              "default": 0,
+              "title": "Wait"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a job and its result now",
+        "operationId": "delete_job_v1_jobs__job_id__delete",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Full status: 503 unless OCR models are present AND the text LLM is available",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "summary": "Liveness: the process is up (for restarts by an orchestrator)",
+        "operationId": "health_live_health_live_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Readiness: OCR models present and the job worker running (for load balancers). The LLM is reported but not required, because /v1/extract works without it.",
+        "operationId": "health_ready_health_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/handwriting": {
+      "get": {
+        "tags": [
+          "experimental"
+        ],
+        "summary": "Experimental: status of the handwriting model (enabled, installed, downloaded, loaded or reachable). Not part of /health or /health/ready",
+        "operationId": "handwriting_status_health_handwriting_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Body_extract_text_v1_extract_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "includeBoxes": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Includeboxes",
+            "description": "Add `lines` [{text, confidence, bbox}] and the image size to every OCR page (default: the profile's, normally false)"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile",
+            "description": "Processing profile: one of your client's (default: its first)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_extract_text_v1_extract_post"
+      },
+      "Body_handwriting_v1_handwriting_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_handwriting_v1_handwriting_post"
+      },
+      "Body_upload_v1_documents_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "callbackUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callbackurl",
+            "description": "Webhook URL (host must be allow-listed)"
+          },
+          "externalId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Externalid",
+            "description": "Your reference, echoed in the job and webhook (at most 128 characters)"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata",
+            "description": "JSON object echoed in the job and webhook (at most 2048 bytes)"
+          },
+          "includeBoxes": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Includeboxes",
+            "description": "Add `lines` [{text, confidence, bbox}] and the image size to every OCR page (default: the profile's, normally false)"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile",
+            "description": "Processing profile: one of your client's (default: its first). Changes processing, output and retention; see `processing.profile`"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_v1_documents_post"
+      },
+      "ErrorDetail": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "requestId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requestid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorDetail"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse"
+      },
+      "ExtractResult": {
+        "properties": {
+          "file": {
+            "$ref": "#/components/schemas/FileInfo"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/Page"
+            },
+            "type": "array",
+            "title": "Pages"
+          },
+          "fullText": {
+            "type": "string",
+            "title": "Fulltext",
+            "description": "All pages' text, as extracted"
+          },
+          "normalizedText": {
+            "type": "string",
+            "title": "Normalizedtext",
+            "description": "Arabic-normalized text, for search and matching"
+          },
+          "languages": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "ar",
+                "en"
+              ]
+            },
+            "type": "array",
+            "title": "Languages"
+          },
+          "timingsMs": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Timingsms",
+            "description": "Milliseconds per stage, e.g. extract, ocr, llm, vision, total (ocrPages: number of OCR'd pages); keys depend on the stages run"
+          },
+          "processing": {
+            "$ref": "#/components/schemas/Processing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file",
+          "pages",
+          "fullText",
+          "normalizedText",
+          "languages",
+          "timingsMs",
+          "processing"
+        ],
+        "title": "ExtractResult",
+        "description": "Text-only result. `languages` lists `ar`/`en` by amount of text."
+      },
+      "FileInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The file name as uploaded"
+          },
+          "mimeType": {
+            "type": "string",
+            "title": "Mimetype",
+            "description": "Detected from the content (magic bytes), never from the name"
+          },
+          "pages": {
+            "type": "integer",
+            "title": "Pages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "mimeType",
+          "pages"
+        ],
+        "title": "FileInfo"
+      },
+      "HandwritingModel": {
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": [
+              "transformers",
+              "openai"
+            ],
+            "title": "Backend"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The model (Hugging Face id, local folder or served name)"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device",
+            "description": "cpu / cuda for the transformers backend; null for openai"
+          },
+          "maxPixels": {
+            "type": "integer",
+            "title": "Maxpixels",
+            "description": "Largest image size the model saw (pixels)"
+          },
+          "segmenter": {
+            "type": "string",
+            "title": "Segmenter",
+            "description": "How pages were split for the model (whole_page in this version)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "backend",
+          "name",
+          "maxPixels",
+          "segmenter"
+        ],
+        "title": "HandwritingModel"
+      },
+      "HandwritingPage": {
+        "properties": {
+          "page": {
+            "type": "integer",
+            "title": "Page",
+            "description": "1-based"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "As the model read it: only line endings and surrounding whitespace are tidied"
+          },
+          "confidence": {
+            "type": "null",
+            "title": "Confidence",
+            "description": "Always null: the model gives no calibrated confidence, and none is made up"
+          },
+          "ms": {
+            "type": "integer",
+            "title": "Ms",
+            "description": "Milliseconds spent on this page"
+          },
+          "skipped": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "blank"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped",
+            "description": "blank: the page has (almost) no ink, so it was not sent to the model"
+          },
+          "warnings": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "truncated",
+                "repetition_loop"
+              ]
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "truncated: the output hit HANDWRITING_MAX_NEW_TOKENS; repetition_loop: the output repeats itself (a decoding loop). Review such pages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page",
+          "text",
+          "ms",
+          "warnings"
+        ],
+        "title": "HandwritingPage"
+      },
+      "HandwritingResult": {
+        "properties": {
+          "file": {
+            "$ref": "#/components/schemas/FileInfo"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/HandwritingPage"
+            },
+            "type": "array",
+            "title": "Pages"
+          },
+          "fullText": {
+            "type": "string",
+            "title": "Fulltext",
+            "description": "All pages' text, blank pages left out"
+          },
+          "languages": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "ar",
+                "en"
+              ]
+            },
+            "type": "array",
+            "title": "Languages"
+          },
+          "timingsMs": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Timingsms",
+            "description": "Milliseconds: decode, model, total"
+          },
+          "model": {
+            "$ref": "#/components/schemas/HandwritingModel"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file",
+          "pages",
+          "fullText",
+          "languages",
+          "timingsMs",
+          "model"
+        ],
+        "title": "HandwritingResult",
+        "description": "Experimental handwriting OCR result. `languages` lists `ar`/`en` by amount of text."
+      },
+      "IdDetectionResult": {
+        "properties": {
+          "isId": {
+            "type": "boolean",
+            "title": "Isid"
+          },
+          "docType": {
+            "type": "string",
+            "enum": [
+              "national_id",
+              "passport",
+              "driver_license",
+              "residence_permit",
+              "other_id",
+              "not_id"
+            ],
+            "title": "Doctype"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence",
+            "description": "0-1, how sure the decision is"
+          },
+          "decidedBy": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "rules",
+                "llm",
+                "vision"
+              ]
+            },
+            "type": "array",
+            "title": "Decidedby",
+            "description": "The stages that took part, in order"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons",
+            "description": "Human-readable reasons, for review screens"
+          },
+          "mrz": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Mrz"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when an MRZ with at most one failed check digit was found"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isId",
+          "docType",
+          "confidence",
+          "decidedBy",
+          "reasons"
+        ],
+        "title": "IdDetectionResult"
+      },
+      "JobCreated": {
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "title": "Jobid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "jobId"
+        ],
+        "title": "JobCreated"
+      },
+      "JobError": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "Stable error code (see the error table); program against it"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "For humans; may change"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "JobError"
+      },
+      "JobView": {
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "title": "Jobid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "processing",
+              "done",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "externalId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Externalid"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Page"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages"
+          },
+          "fullText": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fulltext"
+          },
+          "normalizedText": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalizedtext"
+          },
+          "languages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "ar",
+                    "en"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Languages"
+          },
+          "idDetection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdDetectionResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timingsMs": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timingsms"
+          },
+          "processing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Processing"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "webhook": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WebhookStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "jobId",
+          "status"
+        ],
+        "title": "JobView",
+        "description": "`status` queued/processing/done/failed. When done, the result fields are included; when failed, `error`.\n`webhook` is present when a callbackUrl was given."
+      },
+      "Line": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence",
+            "description": "0-1"
+          },
+          "bbox": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bbox",
+            "description": "[x0, y0, x1, y1] as fractions (0-1) of the page, origin top-left"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "confidence",
+          "bbox"
+        ],
+        "title": "Line"
+      },
+      "Mrz": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "TD1",
+              "TD2",
+              "TD3"
+            ],
+            "title": "Format"
+          },
+          "documentCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Documentcode"
+          },
+          "issuingCountry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issuingcountry"
+          },
+          "surname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surname"
+          },
+          "givenNames": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Givennames"
+          },
+          "documentNumber": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Documentnumber"
+          },
+          "nationality": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nationality"
+          },
+          "birthDate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birthdate",
+            "description": "ISO date YYYY-MM-DD"
+          },
+          "sex": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "M",
+                  "F",
+                  "X"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sex"
+          },
+          "expiryDate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expirydate",
+            "description": "ISO date YYYY-MM-DD"
+          },
+          "optionalData": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optionaldata"
+          },
+          "expired": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expired",
+            "description": "expiryDate is before today"
+          },
+          "valid": {
+            "type": "boolean",
+            "title": "Valid",
+            "description": "All check digits passed"
+          },
+          "checks": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": "object",
+            "title": "Checks",
+            "description": "ICAO check digit per field, e.g. documentNumber, birthDate, expiryDate, personalNumber, composite"
+          },
+          "namesSource": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "mrz",
+                  "mrz+text"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namessource",
+            "description": "mrz+text: names were completed from the printed text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "format",
+          "valid",
+          "checks"
+        ],
+        "title": "Mrz",
+        "description": "Parsed machine-readable zone. Personal data. Rely on a field only when its `checks` entry is true; names carry\nno check digit."
+      },
+      "OcrUsed": {
+        "properties": {
+          "det": {
+            "type": "string",
+            "title": "Det"
+          },
+          "recAr": {
+            "type": "string",
+            "title": "Recar"
+          },
+          "recEn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recen"
+          },
+          "preprocess": {
+            "type": "boolean",
+            "title": "Preprocess"
+          },
+          "dpi": {
+            "type": "integer",
+            "title": "Dpi"
+          }
+        },
+        "type": "object",
+        "required": [
+          "det",
+          "recAr",
+          "preprocess",
+          "dpi"
+        ],
+        "title": "OcrUsed"
+      },
+      "Page": {
+        "properties": {
+          "page": {
+            "type": "integer",
+            "title": "Page",
+            "description": "1-based"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "text_layer",
+              "ocr"
+            ],
+            "title": "Method",
+            "description": "text_layer: taken from the PDF/DOCX; ocr: recognized"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence",
+            "description": "Average OCR confidence 0-1; null for text_layer pages"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width",
+            "description": "OCR pages with includeBoxes: pixel width of the OCR'd image"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height",
+            "description": "OCR pages with includeBoxes: pixel height of the OCR'd image"
+          },
+          "lines": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Line"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lines",
+            "description": "OCR pages with includeBoxes: lines in reading order"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page",
+          "method",
+          "text"
+        ],
+        "title": "Page"
+      },
+      "Processing": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile",
+            "description": "The processing profile (`default`: the global settings)"
+          },
+          "ocr": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OcrUsed"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rules": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rules"
+          },
+          "llm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm"
+          },
+          "vision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vision"
+          },
+          "withheld": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "text",
+                    "mrz"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Withheld",
+            "description": "Left out by the profile (data minimization): `text` = pages[].text, fullText, normalizedText and lines are empty and the AI models' reasons are removed; `mrz` = no idDetection.mrz. Withheld data is not stored either."
+          }
+        },
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "title": "Processing",
+        "description": "What produced this result, for audits: the service version, the processing profile, and the OCR models, rules\nfile version (start of its SHA-256) and LLMs that were actually used. A part that wasn't used is left out."
+      },
+      "WebhookStatus": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "delivered",
+              "failed"
+            ],
+            "title": "State"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "attempts"
+        ],
+        "title": "WebhookStatus"
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Api-Key"
+      }
+    }
+  }
+}

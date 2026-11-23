@@ -1,0 +1,18 @@
+# Admin dashboard users. Copy to config/admins.yaml, edit, and set ADMIN_USERS_FILE=config/admins.yaml
+# (and ADMIN_SESSION_SECRET: `uv run python scripts/admin_user.py secret`).
+#
+# The file holds NO secrets, only scrypt password hashes: `uv run python scripts/admin_user.py hash` prints one.
+# Roles: admin (may change configuration, keys, delete jobs, acknowledge alerts) or viewer (read-only).
+# The file is re-read when it changes: removing a user or changing a role takes effect on their next request, and a
+# new password hash ends that user's sessions.
+#
+# The hash below is a random placeholder that matches no password: replace it.
+admins:
+  alice:
+    name: "Alice Admin"
+    role: admin
+    password_scrypt: "scrypt$16384$8$1$c2FsdHNhbHRzYWx0c2FsdA==$cGxhY2Vob2xkZXJwbGFjZWhvbGRlcnBsYWNlaG9sZA=="
+  ops:
+    name: "Operations (read-only)"
+    role: viewer
+    password_scrypt: "scrypt$16384$8$1$b3BzX3NhbHRfb3BzX3NhbHQ=$cGxhY2Vob2xkZXJfb3BzX3BsYWNlaG9sZGVyX29wcw=="
