@@ -1,0 +1,3 @@
+# Server-only config files (admins.yaml, clients.yaml) mounted into the container; see docker-compose.yml.
+*
+!.gitignore

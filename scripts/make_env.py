@@ -24,6 +24,8 @@ def settings(gpu: bool) -> dict[str, str]:
         "API_KEYS": secrets.token_urlsafe(32),
         "POSTGRES_PASSWORD": secrets.token_urlsafe(32),
         "RESULT_ENCRYPTION_KEY": base64.b64encode(os.urandom(32)).decode(),
+        # used only once ADMIN_USERS_FILE is set (admin dashboard, docs/DEPLOY-EC2.md)
+        "ADMIN_SESSION_SECRET": secrets.token_urlsafe(32),
         "LOG_FORMAT": "json",  # .env.example says text; a server wants one JSON object per line
         # LLM on its own thread so OCR (CPU) and the LLM (Ollama) overlap; the setting's comment in .env.example
         "LLM_WORKER_THREADS": "1" if gpu else "0",

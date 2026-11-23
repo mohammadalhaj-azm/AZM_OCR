@@ -121,7 +121,37 @@ curl.exe -H "X-Api-Key: $KEY" -F "file=@D:\private\note.jpg" http://127.0.0.1:80
 ```
 The handwriting model loads on the first `/v1/handwriting` request, so that request is slower than the ones after it.
 
-## 8. Day to day
+## 8. Admin dashboard (`/admin`)
+
+`/admin` answers 404 until `ADMIN_USERS_FILE` is set. The users file holds only scrypt password hashes. Put it in
+`config/local/` on the server: that folder is git-ignored and mounted into the container (`docker-compose.yml`).
+
+```bash
+cd ~/ocr
+# 1. a password hash (asks for the password, at least 12 characters; nothing is stored yet)
+docker compose exec app uv run --no-sync python -c   "import getpass; from app.admin.auth import hash_password; print(hash_password(getpass.getpass('Password: ')))"
+
+# 2. the users file: paste the hash printed above
+nano config/local/admins.yaml
+```
+```yaml
+admins:
+  admin:
+    name: "Admin"
+    role: admin
+    password_scrypt: "scrypt$16384$8$1$...the hash..."
+```
+```bash
+# 3. turn it on (.env from make_env.py already has ADMIN_SESSION_SECRET; older ones need it added)
+grep -q '^ADMIN_SESSION_SECRET=' .env || echo "ADMIN_SESSION_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" >> .env
+echo 'ADMIN_USERS_FILE=/app/config/local/admins.yaml' >> .env
+docker compose up -d
+```
+Open **http://localhost:8000/admin** through the SSH tunnel (step 7). Use `localhost`: in production mode the
+session cookie is `Secure`, and browsers accept that over plain HTTP only for `localhost`. Adding or changing users
+in `admins.yaml` later needs no restart, because the file is re-read when it changes.
+
+## 9. Day to day
 
 | Task | Command |
 |---|---|

@@ -58,14 +58,15 @@ services:
       UPLOAD_DIR: /tmp/ocr-id-service
       JOB_STORE: postgres
       DATABASE_URL: postgresql://ocr:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/ocr
-    # Client registry: put CLIENTS_FILE=/app/config/clients.yaml and the clients' webhook secret variables in .env,
-    # and mount the file (it holds only key hashes, no secrets):
-    # Admin dashboard (/admin): put ADMIN_USERS_FILE=/app/config/admins.yaml and ADMIN_SESSION_SECRET in .env, and mount
-    # the users file (it holds only password hashes, no secrets). Keep /admin on an internal network.
-    # volumes:
-    #   - ./config/clients.yaml:/app/config/clients.yaml:ro
-    #   - ./config/admins.yaml:/app/config/admins.yaml:ro
-    # For the accuracy panel, also mount an eval run folder and set EVAL_OUT_DIR (eval/ is not in the image).
+    # Files in config/ are baked into the image (rebuild after changing them). Server-only files that are not in git go
+    # in config/local/ (git-ignored), mounted below and re-read when they change, no rebuild needed. They hold only
+    # hashes, no secrets:
+    #   admin dashboard (/admin): ADMIN_USERS_FILE=/app/config/local/admins.yaml and ADMIN_SESSION_SECRET in .env
+    #   client registry:          CLIENTS_FILE=/app/config/local/clients.yaml and the clients' webhook secrets in .env
+    # Keep /admin on an internal network. For the accuracy panel, also mount an eval run folder and set EVAL_OUT_DIR
+    # (eval/ is not in the image).
+    volumes:
+      - ./config/local:/app/config/local:ro
     tmpfs:
       - /tmp:mode=1777  # temp files and UPLOAD_DIR live in RAM only, never on persistent disk
     ports:
