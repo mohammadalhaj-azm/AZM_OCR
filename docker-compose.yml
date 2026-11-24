@@ -14,8 +14,10 @@ services:
     image: ollama/ollama:0.40.16
     environment:
       OLLAMA_NO_CLOUD: "1"
-      OLLAMA_MAX_LOADED_MODELS: "1"
-      OLLAMA_KEEP_ALIVE: "30m"
+      # 1 = the text and vision models take turns in memory (each switch reloads one from disk). On a GPU with room
+      # for both (e.g. L4 24 GB), OLLAMA_MAX_LOADED_MODELS=2 in .env keeps both loaded; check nvidia-smi.
+      OLLAMA_MAX_LOADED_MODELS: "${OLLAMA_MAX_LOADED_MODELS:-1}"
+      OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:-30m}"
     volumes:
       - ollama-models:/root/.ollama
     networks: [internal]

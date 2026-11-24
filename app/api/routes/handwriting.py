@@ -7,7 +7,7 @@ Fully separate from /v1/extract and /v1/documents: its own service (app/handwrit
 import logging
 import time
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
 from app.api import audit
@@ -18,7 +18,7 @@ from app.api.models import HandwritingResult
 from app.api.store import AuditEvent, JobStore
 from app.config import Settings
 from app.extractors.filetype import FileRejected
-from app.handwriting import HandwritingBusy, HandwritingService, HandwritingUnavailable
+from app.handwriting import HandwritingBusy, HandwritingService, HandwritingUnavailable, UnknownChoice
 
 log = logging.getLogger("app.api")
 router = APIRouter()
@@ -44,8 +44,15 @@ def _facts(result: dict) -> dict:
                          "a time (503 `busy` otherwise). Pages without ink are skipped, not sent to the model. "
                          "`confidence` is always null: the model gives no calibrated confidence. Separate from "
                          "`/v1/extract`, and may change while it is evaluated. The file is processed in memory "
-                         "only.")
+                         "only. `model` picks one of the server's handwriting models (`GET /health/handwriting` "
+                         "lists them; 400 `unknown_model` otherwise), `segmenter` how pages are split for it: "
+                         "`whole_page` (one call per page, also for an image that is already a single line) or "
+                         "`lines` (one call per detected text line).")
 async def handwriting(request: Request, file: UploadFile = File(...),
+                      model: str | None = Form(None, description="Handwriting model id; empty = the server's default",
+                                               max_length=64),
+                      segmenter: str | None = Form(None, description="whole_page or lines; empty = the model's "
+                                                                     "default", max_length=32),
                       client: Client = Depends(require_scope("extract")),
                       settings: Settings = Depends(app_settings), store: JobStore = Depends(app_store),
                       service: HandwritingService = Depends(app_handwriting)):
@@ -55,7 +62,7 @@ async def handwriting(request: Request, file: UploadFile = File(...),
     t0 = time.perf_counter()
     status, pages = "failed", 0
     try:
-        result = await run_in_threadpool(service.transcribe, data, mime)
+        result = await run_in_threadpool(service.transcribe, data, mime, model or None, segmenter or None)
         result["file"] = {"name": file.filename or "", **result["file"]}
         status, pages = "done", result["file"]["pages"]
         facts = {"endpoint": "handwriting", **audit.file_facts(data, mime),
@@ -66,6 +73,9 @@ async def handwriting(request: Request, file: UploadFile = File(...),
     except FileRejected as e:
         status = "rejected"
         raise ApiError(REJECT_STATUS.get(e.code, 400), e.code, str(e)) from None
+    except UnknownChoice as e:  # a configured name, never document content
+        status = "rejected"
+        raise ApiError(400, e.code, str(e)) from None
     except HandwritingBusy:
         status = "busy"
         raise ApiError(503, "busy", "the handwriting model is busy, retry later", retry_after(settings)) from None

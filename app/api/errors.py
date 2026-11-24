@@ -32,6 +32,7 @@ CODES = {
     "busy": "EXTRACT_MAX_CONCURRENT reached (/v1/handwriting: the model is busy); retry after Retry-After seconds",
     "handwriting_unavailable": "(experimental /v1/handwriting) the handwriting model is disabled, not installed, not "
                                "downloaded or its server is unreachable",
+    "unknown_model": "(experimental /v1/handwriting) the requested handwriting model is not configured on this server",
     "internal_error": "processing failed (no details are returned)",
 }
 _DEFAULT_CODE = {400: "invalid_request", 401: "unauthorized", 403: "forbidden", 404: "not_found",

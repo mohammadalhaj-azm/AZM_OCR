@@ -34,12 +34,15 @@ handwriting = [
     "torch>=2.8",
     "torchvision>=0.23",  # the model's fast image processor (Qwen2VLImageProcessorFast) needs it
     "transformers>=5,<6",  # checkpoint saved with 4.57.1; v4 would downgrade huggingface-hub for the whole app
+    "peft>=0.18",  # LoRA adapters (HANDWRITING_ADAPTER); 0.18 is the first release for transformers 5
 ]
 handwriting-cuda = [
     "accelerate>=1.10",
     "torch>=2.8",
     "torchvision>=0.23",
     "transformers>=5,<6",
+    "peft>=0.18",
+    "bitsandbytes>=0.45",  # HANDWRITING_QUANTIZATION=4bit (NF4 on CUDA)
 ]
 
 [tool.uv]

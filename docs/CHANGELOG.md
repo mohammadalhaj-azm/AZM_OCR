@@ -13,6 +13,10 @@ Changes that client systems can see. The API contract is `/v1`, and within it ch
   model (`HandwritingResult`: `pages[].confidence` is always `null`). `GET /health/handwriting` reports its status.
 - New error code `handwriting_unavailable` (503), returned by this endpoint only.
 - Nothing changes in `/v1/extract`, `/v1/documents`, `/v1/jobs` or their results.
+- `/v1/handwriting` (still experimental): optional `model` and `segmenter` form fields (several models can be offered
+  side by side; without the fields the default model answers as before), `model.id`, `model.adapter` and
+  `model.quantization` in the result (when they apply), page warnings `no_lines` and `too_many_lines`, error code
+  `unknown_model` (400). `GET /health/handwriting` lists the models under `models`.
 
 ## 0.4.0 (2026-11-21)
 

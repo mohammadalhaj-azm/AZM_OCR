@@ -1,10 +1,15 @@
 """Handwriting model backends: the model in this process (transformers), or an OpenAI-compatible server (vLLM).
 
-Model: sherif1313/Arabic-English-handwritten-OCR-v3, a full fine-tune of Qwen2.5-VL-3B-Instruct (Apache-2.0).
-Two things in its repo must never apply silently, so both backends set them on every call:
+Default model: sherif1313/Arabic-English-handwritten-OCR-v3, a full fine-tune of Qwen2.5-VL-3B-Instruct (Apache-2.0).
+Any Qwen2.5-VL checkpoint works, optionally with a PEFT LoRA adapter (HANDWRITING_ADAPTER) and in 4-bit
+(HANDWRITING_QUANTIZATION=4bit: bitsandbytes NF4, CUDA only), e.g. QCRI/Fanar-2-Oryx-IVU with the
+mabdulaziz499/arabic-htr-fanar-7b-lora adapter (config/handwriting_models.yaml).
+Two things in such repos must never apply silently, so both backends set them on every call:
 - generation_config.json turns sampling on (do_sample=true, temperature=1e-6): we always decode greedily;
 - the processor allows 12.8 MP images (~16k visual tokens): we cap it with HANDWRITING_MAX_PIXELS.
-The model card's `min_new_tokens=50` is deliberately not used: it forces text out of empty pages.
+The sherif model card's `min_new_tokens=50` is deliberately not used: it forces text out of empty pages.
+An adapter whose weights don't match the model's layer names would load as a silent no-op (LoRA B matrices start
+at zero), so loading checks that its weights really arrived (`adapter_applied`).
 
 The model gives no calibrated confidence, so none is reported (the API returns `confidence: null`).
 Never logs prompts, images or model output: only timings and status.
@@ -88,8 +93,17 @@ def generation_kwargs(s: Settings) -> dict:
             "repetition_penalty": s.handwriting_repetition_penalty}
 
 
-def deps_installed() -> bool:
-    return all(importlib.util.find_spec(m) is not None for m in ("torch", "transformers"))
+def required_packages(s: Settings | None = None) -> list[str]:
+    pkgs = ["torch", "transformers"]
+    if s is not None and s.handwriting_adapter:
+        pkgs.append("peft")
+    if s is not None and s.handwriting_quantization == "4bit":
+        pkgs.append("bitsandbytes")
+    return pkgs
+
+
+def deps_installed(s: Settings | None = None) -> bool:
+    return all(importlib.util.find_spec(m) is not None for m in required_packages(s))
 
 
 WEIGHTS_INDEX = "model.safetensors.index.json"
@@ -126,12 +140,51 @@ def model_cached(model: str) -> bool:
     return find("model.safetensors") is not None
 
 
+ADAPTER_FILES = ("adapter_config.json", "adapter_model.safetensors")
+
+
+def adapter_path(adapter: str) -> str | None:
+    """The local folder of a PEFT adapter (a folder, or its Hugging Face cache snapshot); None if not downloaded."""
+    if Path(adapter).is_dir():
+        return adapter if all((Path(adapter) / f).is_file() for f in ADAPTER_FILES) else None
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except ImportError:
+        return None
+    folders = set()
+    for f in ADAPTER_FILES:
+        try:
+            hit = try_to_load_from_cache(adapter, f)
+        except ValueError:  # not a valid repo id
+            return None
+        if not isinstance(hit, str):
+            return None
+        folders.add(str(Path(hit).parent))
+    return folders.pop() if len(folders) == 1 else None
+
+
+def adapter_applied(named_params) -> tuple[int, int]:
+    """(LoRA B matrices, how many are non-zero). PEFT creates every B as zeros and fills it from the adapter file, so
+    a B that is still all zeros means its weights didn't load (e.g. layer names that don't match the model)."""
+    total = nonzero = 0
+    for name, p in named_params:
+        if "lora_B" in name:
+            total += 1
+            t = p.detach() if hasattr(p, "detach") else p
+            nonzero += bool(float(abs(t).sum()) > 0)
+    return total, nonzero
+
+
 def load_transformers(s: Settings) -> Loaded:
-    if not deps_installed():
-        raise HandwritingUnavailable("the handwriting model needs torch and transformers: "
-                                     "uv sync --extra handwriting")
+    if not deps_installed(s):
+        raise HandwritingUnavailable(f"the handwriting model needs {', '.join(required_packages(s))}: "
+                                     "uv sync --extra handwriting (NVIDIA GPU: --extra handwriting-cuda)")
     if not model_cached(s.handwriting_model):
         raise HandwritingUnavailable("the handwriting model is not downloaded: "
+                                     "uv run python -m app.cli download-handwriting-model")
+    adapter = None
+    if s.handwriting_adapter and (adapter := adapter_path(s.handwriting_adapter)) is None:
+        raise HandwritingUnavailable("the handwriting adapter is not downloaded: "
                                      "uv run python -m app.cli download-handwriting-model")
     import torch
     from transformers import AutoProcessor, GenerationConfig, Qwen2_5_VLForConditionalGeneration
@@ -141,15 +194,36 @@ def load_transformers(s: Settings) -> Loaded:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cuda" and not torch.cuda.is_available():
         raise HandwritingUnavailable("HANDWRITING_DEVICE=cuda but no CUDA device is available")
+    if s.handwriting_quantization == "4bit" and device != "cuda":
+        raise HandwritingUnavailable("HANDWRITING_QUANTIZATION=4bit needs a CUDA GPU")
     dtype = s.handwriting_dtype
     if dtype == "auto":
         dtype = "bfloat16" if device == "cuda" else "float32"  # most CPUs have no fast bf16 matmul
     t0 = time.perf_counter()
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        s.handwriting_model, dtype=getattr(torch, dtype), local_files_only=True).to(device).eval()
-    processor = AutoProcessor.from_pretrained(s.handwriting_model, local_files_only=True, **processor_kwargs(s))
+    kwargs: dict[str, Any] = {"dtype": getattr(torch, dtype), "local_files_only": True}
+    if s.handwriting_quantization == "4bit":
+        from transformers import BitsAndBytesConfig
+
+        kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=getattr(torch, dtype))
+        kwargs["device_map"] = {"": 0}  # quantized weights are placed while loading (no .to() afterwards)
+        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(s.handwriting_model, **kwargs)
+    else:
+        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(s.handwriting_model, **kwargs).to(device)
     base = model.generation_config  # only the token ids are kept from it
-    log.info("handwriting model loaded device=%s dtype=%s ms=%d", device, dtype, (time.perf_counter() - t0) * 1000)
+    if adapter:
+        from peft import PeftModel
+
+        model = PeftModel.from_pretrained(model, adapter)
+        total, nonzero = adapter_applied(model.named_parameters())
+        if total == 0 or nonzero < total:
+            log.error("handwriting adapter not applied lora_b=%d nonzero=%d", total, nonzero)
+            raise HandwritingUnavailable(f"the handwriting adapter's weights were not applied ({nonzero} of {total} "
+                                         "LoRA layers loaded): the adapter doesn't match the model")
+    model.eval()
+    processor = AutoProcessor.from_pretrained(s.handwriting_model, local_files_only=True, **processor_kwargs(s))
+    log.info("handwriting model loaded device=%s dtype=%s quantization=%s adapter=%s ms=%d", device, dtype,
+             s.handwriting_quantization, bool(adapter), (time.perf_counter() - t0) * 1000)
 
     def generation_config(**kw):
         return GenerationConfig(eos_token_id=base.eos_token_id, pad_token_id=base.pad_token_id,
@@ -209,9 +283,12 @@ class TransformersBackend:
         return {"backend": self.name, "name": self.s.handwriting_model, "device": m.device if m else None}
 
     def status(self) -> dict:
-        return {"backend": self.name, "depsInstalled": deps_installed(),
-                "modelDownloaded": model_cached(self.s.handwriting_model), "loaded": self._loaded is not None,
-                "error": self._error}
+        out = {"backend": self.name, "depsInstalled": deps_installed(self.s),
+               "modelDownloaded": model_cached(self.s.handwriting_model), "loaded": self._loaded is not None,
+               "error": self._error}
+        if self.s.handwriting_adapter:
+            out["adapterDownloaded"] = adapter_path(self.s.handwriting_adapter) is not None
+        return out
 
 
 # --- OpenAI-compatible server (vLLM) ---------------------------------------------------------------------------------

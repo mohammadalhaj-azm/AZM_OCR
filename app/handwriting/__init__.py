@@ -5,6 +5,6 @@ transformers are imported only when the in-process model is loaded (pip extra `h
 """
 
 from app.handwriting.backends import HandwritingUnavailable
-from app.handwriting.service import HandwritingBusy, HandwritingService
+from app.handwriting.service import HandwritingBusy, HandwritingService, UnknownChoice
 
-__all__ = ["HandwritingBusy", "HandwritingService", "HandwritingUnavailable"]
+__all__ = ["HandwritingBusy", "HandwritingService", "HandwritingUnavailable", "UnknownChoice"]

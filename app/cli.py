@@ -3,7 +3,7 @@
     uv run python -m app.cli extract <file> [--boxes]   # print extraction JSON (--boxes: line bboxes)
     uv run python -m app.cli analyze <file>     # extraction + ID detection (needs Ollama for the LLM step)
     uv run python -m app.cli download-models    # one-time OCR model download (needs internet)
-    uv run python -m app.cli download-handwriting-model [--model ID]   # experimental handwriting model (~7.5 GB)
+    uv run python -m app.cli download-handwriting-model [--model ID]   # experimental handwriting model(s)
     uv run python -m app.cli audit-ref <externalId>   # the externalIdHash to search the audit trail for
 """
 
@@ -26,8 +26,9 @@ def main(argv: list[str] | None = None) -> int:
     analyze_p.add_argument("--boxes", action="store_true", help="add lines with bounding boxes to OCR pages")
     sub.add_parser("download-models", help="download the configured PaddleOCR models")
     hw_p = sub.add_parser("download-handwriting-model",
-                          help="download the handwriting model (HANDWRITING_MODEL) into the Hugging Face cache")
-    hw_p.add_argument("--model", help="Hugging Face model id (default: HANDWRITING_MODEL)")
+                          help="download the handwriting model(s) into the Hugging Face cache: HANDWRITING_MODEL (and "
+                               "HANDWRITING_ADAPTER), or every model and adapter in HANDWRITING_MODELS_FILE")
+    hw_p.add_argument("--model", help="one Hugging Face repo id (a model or an adapter) instead")
     ref_p = sub.add_parser("audit-ref", help="print the externalIdHash of a reference, to search the audit trail "
                                              "(uses RESULT_ENCRYPTION_KEY like the service)")
     ref_p.add_argument("external_id")
@@ -40,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "download-handwriting-model":
-        return download_handwriting_model(args.model or get_settings().handwriting_model)
+        return download_handwriting_model(args.model) if args.model else download_handwriting_models()
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")  # Arabic on Windows consoles
@@ -75,6 +76,28 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def handwriting_repos(settings) -> list[str]:
+    """Every repo the configured handwriting models need (base models and adapters), each once, in order. Models
+    on the openai backend are served by another server and are left out."""
+    from app.handwriting.registry import load_models
+
+    _, models = load_models(settings)
+    repos = []
+    for s in models.values():
+        if s.handwriting_backend == "openai":
+            continue
+        for repo in (s.handwriting_model, s.handwriting_adapter):
+            if repo and repo not in repos:
+                repos.append(repo)
+    return repos
+
+
+def download_handwriting_models() -> int:
+    for repo in handwriting_repos(get_settings()):
+        download_handwriting_model(repo)
+    return 0
+
+
 def download_handwriting_model(model: str) -> int:
     """One-time download (needs internet); the service itself loads it offline (local_files_only)."""
     if Path(model).is_dir():
@@ -83,6 +106,7 @@ def download_handwriting_model(model: str) -> int:
     from huggingface_hub import snapshot_download
 
     # this command only: the service keeps HF_HUB_OFFLINE=1 (app/privacy.py)
+    # model: config, processor, tokenizer, chat template, weights; adapter: adapter_config.json + its safetensors
     path = snapshot_download(model, allow_patterns=["*.json", "*.jinja", "*.txt", "*.safetensors"])
     print(f"handwriting model ready: {path}")
     return 0

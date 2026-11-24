@@ -164,6 +164,55 @@ in `admins.yaml` later needs no restart, because the file is re-read when it cha
 **Stop the EC2 instance** when you are not testing: a running g6 costs money every hour. A stopped instance only costs
 its disk. The data, models and `.env` survive a stop and start. The public IP changes unless you attach an Elastic IP.
 
+## 10. Testing the Fanar handwriting model
+
+Next to the current handwriting model (`sherif-v3`), the server can offer `fanar`: a LoRA adapter on
+`QCRI/Fanar-2-Oryx-IVU`, loaded in 4-bit, reading one line at a time (README, "Several models side by side"). The
+current model stays the default; a request uses Fanar only with `-F model=fanar`. Switching back needs no code
+change: remove the `HANDWRITING_MODELS_FILE` line from `.env` and run `docker compose up -d`.
+
+```bash
+cd ~/ocr && git pull                     # the branch with the Fanar support
+echo 'HANDWRITING_MODELS_FILE=config/handwriting_models.yaml' >> .env
+grep -q '^OLLAMA_MAX_LOADED_MODELS=' .env \
+  && sed -i 's|^OLLAMA_MAX_LOADED_MODELS=.*|OLLAMA_MAX_LOADED_MODELS=1|' .env \
+  || echo 'OLLAMA_MAX_LOADED_MODELS=1' >> .env   # leave GPU memory for both handwriting models while comparing
+docker compose build                      # new packages: peft, bitsandbytes
+docker compose --profile setup run --rm handwriting-pull   # downloads Fanar: ~16.6 GB base + 162 MB adapter
+docker compose up -d
+curl -s http://127.0.0.1:8000/health/handwriting; echo    # models.fanar: depsInstalled, modelDownloaded, adapterDownloaded true
+```
+GPU memory, rough estimates to check with `nvidia-smi`: the current model ~8 GB, Fanar in 4-bit ~6 GB, one Ollama
+model ~6–7 GB. Each handwriting model loads on its first request and then stays loaded.
+
+Try it (through the SSH tunnel, from your laptop):
+```powershell
+curl.exe -H "X-Api-Key: $KEY" -F "file=@D:\private\page.jpg" -F model=fanar http://127.0.0.1:8000/v1/handwriting
+curl.exe -H "X-Api-Key: $KEY" -F "file=@D:\private\page.jpg" http://127.0.0.1:8000/v1/handwriting   # current model
+# an image that is already ONE line: send it whole instead of splitting it
+curl.exe -H "X-Api-Key: $KEY" -F "file=@D:\private\line.png" -F model=fanar -F segmenter=whole_page http://127.0.0.1:8000/v1/handwriting
+```
+The first Fanar request loads the model (slow); then check `docker compose logs app | grep "handwriting model loaded"`
+says `quantization=4bit adapter=True`. Look at the page `warnings`: `no_lines` (the detector found no line),
+`too_many_lines`, `truncated`, `repetition_loop`.
+
+**Compare both on the same hand-checked samples** (README, "Evaluate it on your documents": a folder with
+`manifest.csv` and typed transcripts; copy it to the server, e.g. `~/hw-samples`). The evaluation runs inside the app
+image, in its own process, so stop the app first (both would load models on the GPU):
+```bash
+cd ~/ocr
+mkdir -p eval/out && chmod 777 eval/out   # the container's user writes the reports here
+docker compose stop app
+for m in sherif-v3 fanar; do
+  docker compose run --rm --no-deps -v "$PWD/eval:/app/eval" -v "$HOME/hw-samples:/samples:ro" app \
+    uv run --no-sync python -m eval.run_handwriting_eval /samples --model "$m" --save-text
+done
+docker compose start app
+ls eval/out/                              # handwriting-<time>-sherif-v3/ and handwriting-<time>-fanar/: report.md each
+```
+Compare raw and normalized CER/WER per category, the invented text on blank / signature / stamp pages, and the time
+per page. The reports hold your file names and (with `--save-text`) the read text: keep `eval/out` private.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -174,3 +223,6 @@ its disk. The data, models and `.env` survive a stop and start. The public IP ch
 | `/v1/handwriting` 503 `handwriting_unavailable` | The message says why. `modelDownloaded: false` means run `handwriting-pull`. "no CUDA device" means the app container has no GPU: check `COMPOSE_FILE` in `.env` and `docker compose config` |
 | `ollama ps` shows CPU or a split | Not enough free VRAM: check `nvidia-smi`; keep `OLLAMA_MAX_LOADED_MODELS=1` |
 | Build fails | Paste the error. The Docker files haven't been built on a GPU host before this deployment |
+| Fanar: "adapter's weights were not applied (0 of N ...)" | The adapter's layer names don't match the model as this transformers/peft version builds it. It refuses rather than run the base model silently: send me the log line |
+| Fanar: `4bit needs a CUDA GPU`, or a bitsandbytes error at load | The app container has no GPU (see above), or bitsandbytes doesn't fit this CUDA/driver: send the log (`docker compose logs app`) |
+| `400 unknown_model` | `HANDWRITING_MODELS_FILE` isn't set in `.env` (only one model then), or a typo in `model` |

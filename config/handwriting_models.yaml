@@ -1,0 +1,34 @@
+# Handwriting models side by side (experimental POST /v1/handwriting). Turn it on with
+#   HANDWRITING_MODELS_FILE=config/handwriting_models.yaml
+# A request picks one with the `model` form field (e.g. -F model=fanar); without it the default answers.
+# Then `uv run python -m app.cli download-handwriting-model` (Docker: the handwriting-pull service) downloads every
+# model and adapter listed here. GET /health/handwriting shows each one's status.
+#
+# Keys are the HANDWRITING_* settings without the prefix (model, adapter, quantization, segmenter, prompt,
+# min_pixels, max_pixels, max_new_tokens, repetition_penalty, device, dtype, max_side, timeout_s, max_lines, backend,
+# base_url). A key that isn't given keeps its HANDWRITING_* value from the environment. No secrets here.
+# Each model stays loaded once it was used: check the GPU memory (nvidia-smi) when several are in use.
+
+default: sherif-v3
+
+models:
+  # The current model: a full fine-tune of Qwen2.5-VL-3B-Instruct, reads whole pages. ~7.5 GB, bf16 on a GPU.
+  sherif-v3:
+    model: sherif1313/Arabic-English-handwritten-OCR-v3
+    segmenter: whole_page
+
+  # Under evaluation: a LoRA adapter (162 MB) on QCRI/Fanar-2-Oryx-IVU (Qwen2.5-VL-7B based, 16.6 GB download),
+  # both Apache-2.0. It reads ONE line per image, so pages go through the line segmenter. Trained on a 4-bit base
+  # (QLoRA) and benchmarked in 4-bit (its benchmark.json: load_in_4bit), hence 4bit here (~6 GB VRAM, CUDA only).
+  # The settings below are the model card's: prompt, min/max pixels, max_new_tokens, and the base model's
+  # repetition_penalty (generation_config.json), all with greedy decoding.
+  fanar:
+    model: QCRI/Fanar-2-Oryx-IVU
+    adapter: mabdulaziz499/arabic-htr-fanar-7b-lora
+    quantization: 4bit
+    segmenter: lines
+    prompt: "Transcribe the handwritten Arabic text in this image exactly as written, including any diacritics. Output only the transcription, nothing else."
+    min_pixels: 200704
+    max_pixels: 802816
+    max_new_tokens: 160
+    repetition_penalty: 1.05

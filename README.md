@@ -423,6 +423,7 @@ profiles:
   | 413 | `too_large`, `too_many_pages` |
   | 415 | `unsupported_type` |
   | 422 | `invalid_request` (missing/malformed fields) |
+  | 400 | `unknown_model`, `invalid_request` (experimental `/v1/handwriting` only: a `model` or `segmenter` the server doesn't have) |
   | 500 | `internal_error` (no details, by design) |
   | 503 | `queue_full`, `busy`, both with a `Retry-After` header (`RETRY_AFTER_S`, 5); `handwriting_unavailable` (experimental `/v1/handwriting` only) |
 
@@ -812,10 +813,40 @@ The response (shape only; the numbers are placeholders, not measurements):
   (`"skipped": "blank"`); the check is deliberately lenient, so a small signature or a single word still goes to the
   model, and an empty page with visible dirt is not caught either. `warnings` flags pages to review: `truncated`
   (the output hit `HANDWRITING_MAX_NEW_TOKENS`) and `repetition_loop` (the output repeats itself).
-- **Whole page per call** (`HANDWRITING_SEGMENTER=whole_page`). Line or region cropping can be added later as another
-  segmenter (`app/handwriting/regions.py`) without changing the API.
+- **Segmenter:** `HANDWRITING_SEGMENTER=whole_page` (default) sends the whole page in one call; `lines` finds the text
+  lines with the PaddleOCR detector the main OCR already uses (`OCR_DET_MODEL`, on the CPU), sends one call per line,
+  top to bottom, and joins the lines with newlines. Lines on the same height (two columns) become one line. At most
+  `HANDWRITING_MAX_LINES` (60) lines per page (warning `too_many_lines`); a page with ink but no line found gets
+  `no_lines` and empty text, never a whole-page guess. A request can pick the other one with the `segmenter` field
+  (`whole_page` for an image that is already a single line).
 - Errors: `503 handwriting_unavailable` (disabled, extra not installed, model not downloaded, server unreachable; the
-  message says which), `503 busy` (another request is being read; retry after `Retry-After`).
+  message says which), `503 busy` (another request is being read; retry after `Retry-After`), `400 unknown_model`.
+
+### Several models side by side (e.g. testing the Fanar line model)
+`HANDWRITING_MODELS_FILE=config/handwriting_models.yaml` configures several models; a request picks one with the
+`model` form field, and without it the file's `default` answers (the response is then as before, plus `model.id`).
+The shipped file has two:
+- `sherif-v3` (default): the model above, whole pages;
+- `fanar`: the [`mabdulaziz499/arabic-htr-fanar-7b-lora`](https://huggingface.co/mabdulaziz499/arabic-htr-fanar-7b-lora)
+  LoRA adapter (162 MB) on [`QCRI/Fanar-2-Oryx-IVU`](https://huggingface.co/QCRI/Fanar-2-Oryx-IVU) (Qwen2.5-VL-7B
+  based, 16.6 GB), both Apache-2.0. It reads **one line per image**, so it uses the `lines` segmenter, and it runs in
+  **4-bit** (`quantization: 4bit`, bitsandbytes NF4, CUDA only): it was trained on a 4-bit base and its published
+  scores were measured in 4-bit. Prompt, pixel limits, `max_new_tokens` and `repetition_penalty` are the model card's.
+  Its card reports CER 3.77% on KHATT test lines, but it was trained on KHATT train (in-domain) and the KHATT data is
+  for research use: judge it with the evaluation below, on your own pages.
+
+Each entry overrides `HANDWRITING_*` values (`model`, `adapter`, `quantization`, `segmenter`, `prompt`, `min_pixels`,
+`max_pixels`, `max_new_tokens`, `repetition_penalty`, `device`, `dtype`, ...); the rest comes from the environment.
+Unknown keys fail the start. `download-handwriting-model` downloads every model and adapter in the file (needs
+`--extra handwriting-cuda` for 4-bit: `peft` + `bitsandbytes`). An adapter whose weights don't fit the model would load
+as a silent no-op, so loading checks that every LoRA layer received its weights and refuses otherwise
+(`handwriting_unavailable`). Models load on first use and stay loaded; one request at a time for all of them.
+`GET /health/handwriting` lists each model's status under `models`.
+```bash
+curl -H "X-Api-Key: $KEY" -F "file=@page.jpg" -F model=fanar http://127.0.0.1:8000/v1/handwriting
+curl -H "X-Api-Key: $KEY" -F "file=@line.png" -F model=fanar -F segmenter=whole_page http://127.0.0.1:8000/v1/handwriting
+```
+Server steps (Docker on the GPU host): [docs/DEPLOY-EC2.md](docs/DEPLOY-EC2.md#10-testing-the-fanar-handwriting-model).
 
 ### Evaluate it on your documents
 Collect real samples **outside** the repository, with a `manifest.csv` and a hand-typed transcript per file:
@@ -833,6 +864,7 @@ misc/sig1.jpg,signature_only,misc/sig1.txt,reviewer-1,2026-11-21,only the name i
 uv run python -m eval.run_handwriting_eval D:\private\hw-samples                    # model settings from .env
 uv run python -m eval.run_handwriting_eval D:\private\hw-samples --no-blank-check   # the model alone on empty pages
 uv run python -m eval.run_handwriting_eval D:\private\hw-samples --save-text        # + each output, for review
+uv run python -m eval.run_handwriting_eval D:\private\hw-samples --model fanar      # a model of HANDWRITING_MODELS_FILE
 ```
 The report (`eval/out/handwriting-<timestamp>/`: `report.md`, `results.csv`, `summary.json`) gives per category:
 - **raw CER/WER:** only Unicode NFC and whitespace are evened out; every other difference counts;

@@ -299,7 +299,7 @@
           "experimental"
         ],
         "summary": "Experimental: read handwritten text (Arabic first, English too) and return it",
-        "description": "Synchronous and slow (on CPU about a minute or more per page). Images (JPG, PNG, WEBP, TIFF) and PDFs, every page rendered; at most `HANDWRITING_MAX_PAGES` pages. One request at a time (503 `busy` otherwise). Pages without ink are skipped, not sent to the model. `confidence` is always null: the model gives no calibrated confidence. Separate from `/v1/extract`, and may change while it is evaluated. The file is processed in memory only.",
+        "description": "Synchronous and slow (on CPU about a minute or more per page). Images (JPG, PNG, WEBP, TIFF) and PDFs, every page rendered; at most `HANDWRITING_MAX_PAGES` pages. One request at a time (503 `busy` otherwise). Pages without ink are skipped, not sent to the model. `confidence` is always null: the model gives no calibrated confidence. Separate from `/v1/extract`, and may change while it is evaluated. The file is processed in memory only. `model` picks one of the server's handwriting models (`GET /health/handwriting` lists them; 400 `unknown_model` otherwise), `segmenter` how pages are split for it: `whole_page` (one call per page, also for an image that is already a single line) or `lines` (one call per detected text line).",
         "operationId": "handwriting_v1_handwriting_post",
         "requestBody": {
           "content": {
@@ -816,6 +816,32 @@
             "type": "string",
             "contentMediaType": "application/octet-stream",
             "title": "File"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model",
+            "description": "Handwriting model id; empty = the server's default"
+          },
+          "segmenter": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segmenter",
+            "description": "whole_page or lines; empty = the model's default"
           }
         },
         "type": "object",
@@ -1024,6 +1050,18 @@
       },
       "HandwritingModel": {
         "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id",
+            "description": "The model's id on this server, when several are configured"
+          },
           "backend": {
             "type": "string",
             "enum": [
@@ -1036,6 +1074,31 @@
             "type": "string",
             "title": "Name",
             "description": "The model (Hugging Face id, local folder or served name)"
+          },
+          "adapter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adapter",
+            "description": "LoRA adapter applied on top of the model, if any"
+          },
+          "quantization": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "4bit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantization",
+            "description": "4bit when the model ran quantized"
           },
           "device": {
             "anyOf": [
@@ -1056,8 +1119,12 @@
           },
           "segmenter": {
             "type": "string",
+            "enum": [
+              "whole_page",
+              "lines"
+            ],
             "title": "Segmenter",
-            "description": "How pages were split for the model (whole_page in this version)"
+            "description": "How pages were split for the model: whole_page (one call per page) or lines (one call per detected text line)"
           }
         },
         "type": "object",
@@ -1109,12 +1176,14 @@
               "type": "string",
               "enum": [
                 "truncated",
-                "repetition_loop"
+                "repetition_loop",
+                "no_lines",
+                "too_many_lines"
               ]
             },
             "type": "array",
             "title": "Warnings",
-            "description": "truncated: the output hit HANDWRITING_MAX_NEW_TOKENS; repetition_loop: the output repeats itself (a decoding loop). Review such pages"
+            "description": "truncated: the output hit HANDWRITING_MAX_NEW_TOKENS; repetition_loop: the output repeats itself (a decoding loop); no_lines: the lines segmenter found no text line on a page with ink; too_many_lines: only the first HANDWRITING_MAX_LINES lines were read. Review such pages"
           }
         },
         "type": "object",

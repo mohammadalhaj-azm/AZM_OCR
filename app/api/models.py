@@ -176,17 +176,25 @@ class HandwritingPage(_Out):
     ms: int = Field(description="Milliseconds spent on this page")
     skipped: Literal["blank"] | None = Field(
         None, description="blank: the page has (almost) no ink, so it was not sent to the model")
-    warnings: list[Literal["truncated", "repetition_loop"]] = Field(
+    warnings: list[Literal["truncated", "repetition_loop", "no_lines", "too_many_lines"]] = Field(
         description="truncated: the output hit HANDWRITING_MAX_NEW_TOKENS; repetition_loop: the output repeats "
-                    "itself (a decoding loop). Review such pages")
+                    "itself (a decoding loop); no_lines: the lines segmenter found no text line on a page with ink; "
+                    "too_many_lines: only the first HANDWRITING_MAX_LINES lines were read. Review such pages")
 
 
 class HandwritingModel(_Out):
+    _omit_if_none = frozenset({"id", "adapter", "quantization"})
+
+    id: str | None = Field(None, description="The model's id on this server, when several are configured")
     backend: Literal["transformers", "openai"]
     name: str = Field(description="The model (Hugging Face id, local folder or served name)")
+    adapter: str | None = Field(None, description="LoRA adapter applied on top of the model, if any")
+    quantization: Literal["4bit"] | None = Field(None, description="4bit when the model ran quantized")
     device: str | None = Field(None, description="cpu / cuda for the transformers backend; null for openai")
     maxPixels: int = Field(description="Largest image size the model saw (pixels)")
-    segmenter: str = Field(description="How pages were split for the model (whole_page in this version)")
+    segmenter: Literal["whole_page", "lines"] = Field(
+        description="How pages were split for the model: whole_page (one call per page) or lines (one call per "
+                    "detected text line)")
 
 
 class HandwritingResult(_Out):

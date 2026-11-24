@@ -134,7 +134,7 @@ def render_report(summary: dict) -> str:
 
 
 def run(folder: Path, out_dir: Path, service=None, limit: int | None = None, blank_check: bool = True,
-        save_text: bool = False, echo=print) -> dict:
+        save_text: bool = False, echo=print, model: str | None = None, segmenter: str | None = None) -> dict:
     folder = folder.resolve()
     if folder.is_relative_to(REPO_ROOT):
         raise SystemExit("refusing to run: the samples folder must be OUTSIDE the repository")
@@ -154,7 +154,8 @@ def run(folder: Path, out_dir: Path, service=None, limit: int | None = None, bla
 
         apply_offline_env()
         service = HandwritingService(Settings(handwriting_enabled=True, handwriting_blank_check=blank_check))
-    s = service.s
+    chosen, seg = service.resolve(model, segmenter)  # a wrong --model raises UnknownChoice, naming the configured ones
+    s = chosen.s
     out_dir.mkdir(parents=True, exist_ok=True)
     samples: list[Sample] = []
     for n, row in enumerate(verified, 1):
@@ -162,7 +163,7 @@ def run(folder: Path, out_dir: Path, service=None, limit: int | None = None, bla
         try:
             reference = read_reference(folder, row)
             data = (folder / row.file).read_bytes()
-            result = service.transcribe(data, validate_upload(data, s.max_upload_bytes))
+            result = service.transcribe(data, validate_upload(data, s.max_upload_bytes), model, segmenter)
             sample.score = score(reference, result["fullText"])
             sample.pages = len(result["pages"])
             sample.skipped_pages = sum(1 for p in result["pages"] if p.get("skipped"))
@@ -183,12 +184,14 @@ def run(folder: Path, out_dir: Path, service=None, limit: int | None = None, bla
         echo(f"[{n}/{len(verified)}] {row.file}: " + (f"error {sample.error}" if sample.error else
              f"raw CER {_fmt(sc.raw_cer)}, norm CER {_fmt(sc.norm_cer)}, {sample.ms / 1000:.1f}s"))
 
-    info = service.backend.info() if service.backend else {}
+    info = chosen.backend.info() if chosen.backend else {}
     summary = {
-        "config": {"backend": info.get("backend", s.handwriting_backend), "model": s.handwriting_model,
-                   "device": info.get("device"), "maxPixels": s.handwriting_max_pixels,
-                   "maxNewTokens": s.handwriting_max_new_tokens, "customPrompt": bool(s.handwriting_prompt),
-                   "blankCheck": s.handwriting_blank_check, "segmenter": s.handwriting_segmenter},
+        "config": {"modelId": chosen.id, "backend": info.get("backend", s.handwriting_backend),
+                   "model": s.handwriting_model, "adapter": s.handwriting_adapter or None,
+                   "quantization": s.handwriting_quantization, "device": info.get("device"),
+                   "maxPixels": s.handwriting_max_pixels, "maxNewTokens": s.handwriting_max_new_tokens,
+                   "customPrompt": bool(s.handwriting_prompt), "blankCheck": s.handwriting_blank_check,
+                   "segmenter": seg.name},
         "scored": sum(1 for x in samples if x.score is not None),
         "failed": sum(1 for x in samples if x.error),
         "unverified": unverified,
@@ -224,11 +227,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-blank-check", action="store_true",
                         help="send every page to the model (measures invented text without the guard)")
     parser.add_argument("--save-text", action="store_true", help="also write each output to texts/ for review")
+    parser.add_argument("--model", help="handwriting model id from HANDWRITING_MODELS_FILE (default: its default)")
+    parser.add_argument("--segmenter", choices=["whole_page", "lines"],
+                        help="how pages are split for the model (default: the model's segmenter)")
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    out = args.out or REPO_ROOT / "eval" / "out" / time.strftime("handwriting-%Y%m%d-%H%M%S")
-    run(args.folder, out, limit=args.limit, blank_check=not args.no_blank_check, save_text=args.save_text)
+    stamp = time.strftime("%Y%m%d-%H%M%S") + (f"-{args.model}" if args.model else "")
+    out = args.out or REPO_ROOT / "eval" / "out" / f"handwriting-{stamp}"
+    run(args.folder, out, limit=args.limit, blank_check=not args.no_blank_check, save_text=args.save_text,
+        model=args.model, segmenter=args.segmenter)
     return 0
 
 

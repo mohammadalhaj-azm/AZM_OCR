@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     # openai: any OpenAI-compatible server that serves the model (e.g. vLLM on a GPU machine).
     handwriting_backend: Literal["transformers", "openai"] = "transformers"
     handwriting_model: str = "sherif1313/Arabic-English-handwritten-OCR-v3"  # HF id or local folder / served name
+    # Several models side by side, chosen per request (`model` form field): a YAML file, see
+    # config/handwriting_models.yaml. Empty = one model, configured by the HANDWRITING_* settings here.
+    handwriting_models_file: str = ""
+    # transformers backend: a PEFT LoRA adapter (HF id or folder) applied on top of HANDWRITING_MODEL; empty = none
+    handwriting_adapter: str = ""
+    # 4bit = bitsandbytes NF4 (CUDA only), e.g. for an adapter trained and benchmarked on a 4-bit base (QLoRA)
+    handwriting_quantization: Literal["none", "4bit"] = "none"
     handwriting_base_url: str = ""  # openai backend, e.g. http://gpu-server:8002/v1
     handwriting_api_key: str = ""
     handwriting_timeout_s: float = 600.0  # per page (openai backend)
@@ -106,7 +113,10 @@ class Settings(BaseSettings):
     # empty page with visible dirt is NOT caught; the evaluation measures what the model invents for such pages.
     handwriting_blank_check: bool = True
     handwriting_blank_ink_ratio: float = 0.00001  # ink share (margins and specks ignored) below which a page is blank
-    handwriting_segmenter: Literal["whole_page"] = "whole_page"  # V1: the whole page in one model call
+    # whole_page: the whole page in one model call. lines: text lines found by the PaddleOCR detector (OCR_DET_MODEL),
+    # one model call per line, for models that read a single line per image. A request can pick the other one.
+    handwriting_segmenter: Literal["whole_page", "lines"] = "whole_page"
+    handwriting_max_lines: int = 60  # lines segmenter: at most this many lines per page (the rest is not read)
     handwriting_warmup: bool = False  # load the model at startup instead of on the first request
     handwriting_prompt: str = ""  # empty = the prompt the model was fine-tuned with (app/handwriting/backends.py)
 
