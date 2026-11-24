@@ -179,5 +179,6 @@ its disk. The data, models and `.env` survive a stop and start. The public IP ch
 | `/v1/handwriting` 503 `handwriting_unavailable` | The message says why. `modelDownloaded: false` means run `handwriting-pull`. "no CUDA device" means the app container has no GPU: check `COMPOSE_FILE` in `.env` and `docker compose config` |
 | `ollama ps` shows CPU or a split | Not enough free VRAM: check `nvidia-smi`; keep `OLLAMA_MAX_LOADED_MODELS=1` |
 | Build fails | Paste the error. The Docker files haven't been built on a GPU host before this deployment |
+| `ImportError: libcuda.so.1` | The GPU build of Paddle was imported in a container without a GPU. At runtime: the app container has no GPU (check `COMPOSE_FILE` and `docker compose config`). `OCR_DEVICE=cpu` doesn't avoid it in the GPU image |
 | Log says `OCR models loaded on cpu` | The container sees no GPU (same checks as for "no CUDA device" above), or the image was built without `PADDLE_GPU`: rebuild with `docker compose build` |
 | OCR fails on the GPU (a CUDA / cuDNN error in `docker compose logs app`) | `paddlepaddle-gpu` uses torch's CUDA libraries, which are newer minor versions than the ones Paddle pins (see the Dockerfile). Paste the error; meanwhile `OCR_DEVICE=cpu` in `.env` and `docker compose up -d` |

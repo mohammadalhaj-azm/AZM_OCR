@@ -890,7 +890,9 @@ curl http://127.0.0.1:8000/health
   handwriting model then run on the GPU, and so does PaddleOCR: the image is built with `UV_EXTRA=handwriting-cuda`
   and `PADDLE_GPU=3.2.0`, which swaps `paddlepaddle` for `paddlepaddle-gpu` 3.2.0 (CUDA 12.6, from Paddle's own index;
   installed outside `uv.lock` because its exact CUDA-library pins clash with CUDA torch's, see the `Dockerfile`).
-  `OCR_DEVICE=cpu` in `.env` moves OCR back to the CPU without a rebuild. A one-time
+  `OCR_DEVICE=cpu` in `.env` moves OCR back to the CPU without a rebuild (the container still needs its GPU: the GPU
+  build of Paddle can't be imported without the driver's `libcuda.so.1`, which is also why the image downloads the
+  OCR models in a separate CPU build stage). A one-time
   `docker compose --profile setup run --rm handwriting-pull` puts the
   handwriting model into the `hf-models` volume. Step by step for AWS EC2 g6 on Ubuntu 22.04, including host setup
   (`scripts/ec2_setup.sh`) and `.env` generation (`scripts/make_env.py`): [docs/DEPLOY-EC2.md](docs/DEPLOY-EC2.md).
