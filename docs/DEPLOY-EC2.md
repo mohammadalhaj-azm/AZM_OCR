@@ -8,13 +8,13 @@ What runs where:
 
 | Part | Runs on |
 |---|---|
-| PaddleOCR (printed text) | **CPU** (the image has the CPU build of PaddlePaddle) |
+| PaddleOCR (printed text) | GPU (the GPU image has `paddlepaddle-gpu`; `OCR_DEVICE=cpu` in `.env` moves it back to the CPU) |
 | Ollama: text LLM + vision fallback | GPU |
 | Handwriting model (`/v1/handwriting`) | GPU (bfloat16) |
 | PostgreSQL | CPU, `postgres-data` volume |
 
-Because OCR runs on the CPU, the instance size matters as much as the GPU. g6.xlarge, 2xlarge, 4xlarge and 8xlarge
-all have the same single L4; they differ in CPU and RAM.
+g6.xlarge, 2xlarge, 4xlarge and 8xlarge all have the same single L4; they differ in CPU and RAM. With OCR on the GPU
+the CPU still renders the PDF pages and runs the API, and it carries the OCR again if you set `OCR_DEVICE=cpu`.
 
 | Instance | vCPU / RAM | |
 |---|---|---|
@@ -103,7 +103,12 @@ Send one document (step 7). Then check that the models really are on the GPU:
 ```bash
 docker compose exec ollama ollama ps               # PROCESSOR column: "100% GPU" (not "CPU" or a split)
 nvidia-smi                                         # memory in use; the handwriting model adds ~8 GB once loaded
+docker compose logs app | grep "OCR models loaded" # "OCR models loaded on gpu:0" (once per OCR engine)
+docker compose exec app uv run --no-sync python -c "import paddle; paddle.utils.run_check()"   # Paddle sees the GPU
 ```
+The admin dashboard (AI models page, OCR card) shows the same device. To compare, run one scanned PDF with the default
+(GPU), then with `OCR_DEVICE=cpu` in `.env` (`docker compose up -d` to apply), and compare `timings.ocr` in the two
+results.
 
 ## 7. Test from your laptop
 
@@ -174,3 +179,5 @@ its disk. The data, models and `.env` survive a stop and start. The public IP ch
 | `/v1/handwriting` 503 `handwriting_unavailable` | The message says why. `modelDownloaded: false` means run `handwriting-pull`. "no CUDA device" means the app container has no GPU: check `COMPOSE_FILE` in `.env` and `docker compose config` |
 | `ollama ps` shows CPU or a split | Not enough free VRAM: check `nvidia-smi`; keep `OLLAMA_MAX_LOADED_MODELS=1` |
 | Build fails | Paste the error. The Docker files haven't been built on a GPU host before this deployment |
+| Log says `OCR models loaded on cpu` | The container sees no GPU (same checks as for "no CUDA device" above), or the image was built without `PADDLE_GPU`: rebuild with `docker compose build` |
+| OCR fails on the GPU (a CUDA / cuDNN error in `docker compose logs app`) | `paddlepaddle-gpu` uses torch's CUDA libraries, which are newer minor versions than the ones Paddle pins (see the Dockerfile). Paste the error; meanwhile `OCR_DEVICE=cpu` in `.env` and `docker compose up -d` |

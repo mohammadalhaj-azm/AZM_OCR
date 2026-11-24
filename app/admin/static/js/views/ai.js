@@ -45,7 +45,8 @@ export async function render(root, ctx) {
           ["Recognition (Arabic)", h("span", { class: "mono" }, o.models.recognitionAr)],
           ["Recognition (English)", o.models.recognitionEn ? h("span", { class: "mono" }, o.models.recognitionEn) : "off"],
           ["Languages", o.languages.join(", ")],
-          ["Engines", pool ? `${pool.engines} (${pool.loaded} loaded in RAM)${pool.cpuThreads ? ` · ${pool.cpuThreads} threads each` : ""}` : dash],
+          ["Engines", pool ? `${pool.engines} (${pool.loaded} loaded in RAM)${pool.cpuThreads && !(pool.device || "").startsWith("gpu") ? ` · ${pool.cpuThreads} threads each` : ""}` : dash],
+          ["Device", pool ? (pool.device ? h("span", { class: "mono" }, pool.device) : "not loaded yet") : dash],
           ["Parallel AR/EN", pool ? (pool.parallelRec ? "yes" : "no") : dash],
           ["DPI · min score", `${o.dpi} · ${o.minScore}`], ["Preprocessing", o.preprocess ? "deskew + contrast" : "off"]]))),
       ...d.llm.models.map(llmCard)));

@@ -159,6 +159,8 @@ The server detection model (`OCR_DET_MODEL=PP-OCRv5_server_det`) was about 14× 
   With `OCR_CPU_THREADS` unset the cores are split evenly between the engines. In a container with a CPU quota,
   set `OCR_CPU_THREADS` = CPUs / `OCR_ENGINES` yourself.
 - **`OCR_PARALLEL_REC` (true):** the Arabic and English recognizers read the boxes at the same time.
+- **`OCR_DEVICE` (empty):** empty = GPU 0 when PaddlePaddle is the CUDA build and sees a GPU, else the CPU. Or `cpu`,
+  `gpu`, `gpu:1`. Only the GPU Docker image has the CUDA build (see "Docker deployment"); `uv sync` installs the CPU one.
 - **Benchmark:** `uv run python scripts/bench_ocr.py [your-file]` compares the settings on your machine and
   shows text similarity to the baseline (it prints timings only, never text). On this laptop (16 threads,
   synthetic 8-page dense scanned A4 PDF):
@@ -885,8 +887,11 @@ curl http://127.0.0.1:8000/health
   `127.0.0.1:8000`; change the host IP in `docker-compose.yml` to expose it.
 - The container `HEALTHCHECK` uses `/health/ready`, so an Ollama outage doesn't mark the app unhealthy.
 - **NVIDIA GPU server:** add `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml` to `.env`. Ollama and the
-  handwriting model then run on the GPU (PaddleOCR stays on the CPU), the image is built with
-  `UV_EXTRA=handwriting-cuda`, and a one-time `docker compose --profile setup run --rm handwriting-pull` puts the
+  handwriting model then run on the GPU, and so does PaddleOCR: the image is built with `UV_EXTRA=handwriting-cuda`
+  and `PADDLE_GPU=3.2.0`, which swaps `paddlepaddle` for `paddlepaddle-gpu` 3.2.0 (CUDA 12.6, from Paddle's own index;
+  installed outside `uv.lock` because its exact CUDA-library pins clash with CUDA torch's, see the `Dockerfile`).
+  `OCR_DEVICE=cpu` in `.env` moves OCR back to the CPU without a rebuild. A one-time
+  `docker compose --profile setup run --rm handwriting-pull` puts the
   handwriting model into the `hf-models` volume. Step by step for AWS EC2 g6 on Ubuntu 22.04, including host setup
   (`scripts/ec2_setup.sh`) and `.env` generation (`scripts/make_env.py`): [docs/DEPLOY-EC2.md](docs/DEPLOY-EC2.md).
 - These files were written without Docker available on the development machine, so **run the build once** on the target host.
@@ -954,7 +959,7 @@ its default). They are defined in `app/config.py`. The main groups:
 | Logging | `LOG_FORMAT` (`text` / `json`), `LOG_LEVEL` (see [Logging](#logging)) |
 | LLM backend | `LLM_BASE_URL`, `LLM_TEXT_MODEL`, `LLM_VISION_BASE_URL`, `LLM_VISION_MODEL`, `LLM_API_KEY`, `LLM_EXTRA_BODY`, `LLM_TIMEOUT_S`, `LLM_VISION_TIMEOUT_S`, `LLM_ENABLED`, `LLM_MAX_CHARS` |
 | Extraction | `MAX_UPLOAD_MB` (20), `MAX_PAGES` (100), `MIN_TEXT_CHARS_PER_PAGE` (30), `OCR_DPI` (300) |
-| OCR | `OCR_DET_MODEL`, `OCR_REC_MODEL_AR`, `OCR_REC_MODEL_EN`, `OCR_MIN_SCORE`, `OCR_MAX_SIDE`, `OCR_CPU_THREADS`, `OCR_PREPROCESS`, `OCR_ENGINES`, `OCR_PARALLEL_REC`, `OCR_REC_BATCH_SIZE` |
+| OCR | `OCR_DET_MODEL`, `OCR_REC_MODEL_AR`, `OCR_REC_MODEL_EN`, `OCR_MIN_SCORE`, `OCR_MAX_SIDE`, `OCR_DEVICE`, `OCR_CPU_THREADS`, `OCR_PREPROCESS`, `OCR_ENGINES`, `OCR_PARALLEL_REC`, `OCR_REC_BATCH_SIZE` |
 | Detection | `ID_PATTERNS_PATH` (keywords + country ID regexes), `RULES_WEIGHT`, `VISION_ENABLED`, `VISION_THRESHOLD`, `VISION_WEIGHT`, `VISION_MAX_SIDE`, `LLM_SKIP_MIN_PAGES`, `LLM_SKIP_MIN_CHARS`, `LLM_SKIP_CONFIDENCE` |
 | API | `API_KEYS` or `CLIENTS_FILE` ([client registry](#clients-client-registry)), `UPLOAD_DIR`, `RESULT_TTL_S`, `MAX_QUEUED_JOBS`, `WORKER_THREADS`, `LLM_WORKER_THREADS`, `OCR_WARMUP`, `EXTRACT_MAX_PAGES`, `EXTRACT_MAX_CONCURRENT`, `RETRY_AFTER_S`, `MAX_WAIT_S`, `METRICS_ENABLED` |
 | Job store | `JOB_STORE` (`memory`/`postgres`), `DATABASE_URL`, `DB_POOL_SIZE`, `DB_POLL_S`, `JOB_STALE_S`, `JOB_MAX_ATTEMPTS`, `RESULT_ENCRYPTION_KEY`, `AUDIT_RETENTION_DAYS` |

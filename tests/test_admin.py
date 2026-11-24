@@ -486,3 +486,13 @@ def test_invalid_users_file_fails_start(tmp_path):
     with pytest.raises(ConfigError):
         create_app(make_settings(tmp_path, admin_users_file=str(tmp_path / "bad.yaml")), services=StubServices(),
                    analyze_fn=fake_analyze)
+
+
+def test_ocr_device_override_is_checked():
+    from app.admin.managed_config import validate_overrides
+
+    base = Settings(_env_file=None)
+    assert validate_overrides(base, {"ocr_device": "cpu"}) == {"ocr_device": "cpu"}
+    assert validate_overrides(base, {"ocr_device": ""}) == {"ocr_device": ""}
+    with pytest.raises(ConfigError, match="ocr_device must be"):
+        validate_overrides(base, {"ocr_device": "cuda:0"})

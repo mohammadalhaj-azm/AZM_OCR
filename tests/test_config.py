@@ -80,3 +80,16 @@ def test_environment_comes_from_env(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "staging")
     with pytest.raises(ValueError):
         Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("value", ["", "cpu", "gpu", "gpu:0", "gpu:1"])
+def test_ocr_device_accepts_paddle_devices(value):
+    assert Settings(_env_file=None, ocr_device=value).ocr_device == value
+
+
+@pytest.mark.parametrize("value", ["cuda", "GPU0", "gpu:", "gpu:a", "cpu:0"])
+def test_ocr_device_rejects_other_values(value):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, ocr_device=value)

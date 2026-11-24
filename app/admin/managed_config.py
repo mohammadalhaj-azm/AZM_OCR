@@ -15,6 +15,7 @@ for new versions every CONFIG_POLL_S, and a replica that can't apply a version k
 
 import copy
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -23,7 +24,7 @@ from typing import Any
 from pydantic import TypeAdapter, ValidationError
 
 from app.api.clients import ClientRegistry, read_clients_file, registry_from_config
-from app.config import ConfigError, Settings
+from app.config import OCR_DEVICE_PATTERN, ConfigError, Settings
 from app.detection.rules import MANAGED_PREFIX, load_rules_text, managed_rules, resolve_rules, set_managed_rules
 
 log = logging.getLogger("app.admin")
@@ -43,7 +44,8 @@ EDITABLE: dict[str, tuple[str, str, float | None, float | None]] = {
     "ocr_rec_model_en": (G_OCR, "restart", None, None), "ocr_det_limit_side_len": (G_OCR, "restart", 16, 4000),
     "ocr_min_score": (G_OCR, "restart", 0, 1), "ocr_max_side": (G_OCR, "restart", 500, 20000),
     "ocr_preprocess": (G_OCR, "restart", None, None), "ocr_engines": (G_OCR, "restart", 1, 16),
-    "ocr_cpu_threads": (G_OCR, "restart", 1, 256), "ocr_parallel_rec": (G_OCR, "restart", None, None),
+    "ocr_cpu_threads": (G_OCR, "restart", 1, 256), "ocr_device": (G_OCR, "restart", None, None),
+    "ocr_parallel_rec": (G_OCR, "restart", None, None),
     "ocr_rec_batch_size": (G_OCR, "restart", 1, 128), "ocr_warmup": (G_OCR, "restart", None, None),
     # AI models
     "llm_enabled": (G_MODELS, "live", None, None), "vision_enabled": (G_MODELS, "live", None, None),
@@ -111,6 +113,8 @@ def validate_overrides(base: Settings, overrides: dict) -> dict:
                 raise ConfigError(f"{key} must be between {lo} and {hi}")
         if isinstance(v, str) and key.endswith("_model") and key != "ocr_rec_model_en" and not v.strip():
             raise ConfigError(f"{key} can't be empty")
+        if key == "ocr_device" and not re.fullmatch(OCR_DEVICE_PATTERN, v):
+            raise ConfigError("ocr_device must be empty (automatic), cpu, gpu or gpu:N")
         clean[key] = _json(v)
     if "llm_extra_body" in clean and clean["llm_extra_body"]:
         import json

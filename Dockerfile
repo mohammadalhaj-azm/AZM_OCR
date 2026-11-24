@@ -1,9 +1,11 @@
 # OCR + ID-detection service. Build: docker compose build   (x86_64 only: no Linux arm64 Paddle wheels)
-# OCR runs on the CPU. UV_EXTRA=handwriting-cuda adds the experimental handwriting model's CUDA torch
+# By default OCR runs on the CPU. UV_EXTRA=handwriting-cuda adds the experimental handwriting model's CUDA torch
 # (docker-compose.gpu.yml sets it); the model itself goes into the hf-models volume, not into the image.
+# PADDLE_GPU=<version> (docker-compose.gpu.yml sets it) puts OCR on the GPU: see the paddlepaddle-gpu step below.
 FROM python:3.12-slim-bookworm
 
 ARG UV_EXTRA=
+ARG PADDLE_GPU=
 
 COPY --from=ghcr.io/astral-sh/uv:0.13.9 /uv /uvx /bin/
 
@@ -21,10 +23,22 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-dev --no-install-project ${UV_EXTRA:+--extra "$UV_EXTRA"}
+RUN uv sync --frozen --no-dev --no-install-project ${UV_EXTRA:+--extra "$UV_EXTRA"} \
+        ${PADDLE_GPU:+--no-install-package paddlepaddle}
+# GPU image: the CUDA 12.6 build of PaddlePaddle instead of the CPU one (both install the `paddle` module, so never
+# both). It comes from Paddle's own index (PyPI has no 3.x GPU wheels) and is installed with --no-deps: its exact
+# nvidia-* pins (e.g. cuDNN 9.5.1.17) clash with CUDA torch's (cuDNN 9.10), so it uses the CUDA 12 libraries that
+# torch installed into site-packages/nvidia, which is where Paddle looks for them. Needs UV_EXTRA=handwriting-cuda.
+RUN if [ -n "$PADDLE_GPU" ]; then \
+        [ -d .venv/lib/python3.12/site-packages/nvidia/cudnn ] \
+            || { echo "PADDLE_GPU needs the CUDA libraries of UV_EXTRA=handwriting-cuda" >&2; exit 1; } \
+        && uv pip install --no-deps "paddlepaddle-gpu==$PADDLE_GPU" \
+            --index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/; \
+    fi
 COPY app ./app
 COPY config ./config
-RUN uv sync --frozen --no-dev ${UV_EXTRA:+--extra "$UV_EXTRA"}
+# --inexact keeps paddlepaddle-gpu, which is not in uv.lock.
+RUN uv sync --frozen --no-dev --inexact ${UV_EXTRA:+--extra "$UV_EXTRA"} ${PADDLE_GPU:+--no-install-package paddlepaddle}
 
 # Bake the OCR models into the image at build time; the running container never downloads anything.
 RUN uv run --no-sync python -m app.cli download-models

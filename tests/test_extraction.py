@@ -126,4 +126,5 @@ def test_pool_ocrs_pdf_pages_in_parallel_with_same_result(fixtures, settings, en
     par = extract(pdf, settings, pool)
     assert [p.method for p in par.pages] == ["ocr"] * 3 and [p.page for p in par.pages] == [1, 2, 3]
     assert [p.text for p in par.pages] == [p.text for p in seq.pages]
+    assert engine.device in ("cpu", "gpu:0") and pool.stats()["device"] == engine.device  # resolved, reported
     assert par.vision_image is not None and par.vision_image.shape == seq.vision_image.shape  # first page kept

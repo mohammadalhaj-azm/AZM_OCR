@@ -1,5 +1,6 @@
 # NVIDIA GPU server (e.g. AWS g6, L4 24 GB). Adds to docker-compose.yml; needs nvidia-container-toolkit on the host.
-#   Ollama (qwen3 text + vision) and the experimental handwriting model run on the GPU; PaddleOCR stays on the CPU.
+#   Ollama (qwen3 text + vision), PaddleOCR (paddlepaddle-gpu, see Dockerfile) and the experimental handwriting model
+#   run on the GPU. OCR_DEVICE=cpu in .env moves OCR back to the CPU without a rebuild.
 #
 # Use it by putting this line in .env (then plain `docker compose ...` commands pick up both files):
 #   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
@@ -29,9 +30,13 @@ services:
       context: .
       args:
         UV_EXTRA: handwriting-cuda
+        PADDLE_GPU: "3.2.0"  # same version as the CPU build in uv.lock
     image: ocr-id-service-app:gpu
     environment:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility  # utility = NVML, for the admin dashboard's GPU panel
+      # Paddle takes GPU memory as it needs it instead of reserving most of it up front, which would starve Ollama
+      # and the handwriting model.
+      FLAGS_allocator_strategy: auto_growth
     volumes:
       - hf-models:/opt/hf
     deploy: *gpu

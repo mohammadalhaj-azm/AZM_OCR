@@ -6,9 +6,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PLACEHOLDER = re.compile(r"change[-_]?me", re.IGNORECASE)  # the example values shipped in .env.example
+OCR_DEVICE_PATTERN = r"^(|cpu|gpu(:\d+)?)$"  # "" = auto
 MIN_SECRET_CHARS = 32  # e.g. python -c "import secrets; print(secrets.token_urlsafe(32))" gives 43
 
 
@@ -70,6 +72,8 @@ class Settings(BaseSettings):
     ocr_min_score: float = 0.5  # drop recognized boxes below this confidence
     ocr_max_side: int = 4000  # downscale larger images before OCR
     ocr_cpu_threads: int | None = None  # None = PaddleOCR default
+    # "" = GPU 0 when PaddlePaddle is the CUDA build (GPU image) and sees a GPU, else the CPU. Or "cpu", "gpu", "gpu:1".
+    ocr_device: str = Field("", pattern=OCR_DEVICE_PATTERN)
     ocr_preprocess: bool = False  # OpenCV deskew + CLAHE
     # Independent OCR engines (each loads its own models, ~0.4 GB RAM): this many images are OCR'd at once, e.g. the
     # scanned pages of one PDF in parallel. With OCR_CPU_THREADS unset, the cores are split evenly between engines.

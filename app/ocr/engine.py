@@ -4,6 +4,7 @@
 are OCR'd at the same time. Each engine is used by one thread at a time.
 """
 
+import logging
 import os
 import queue
 import threading
@@ -20,6 +21,8 @@ from app.ocr.preprocess import preprocess_with_transform
 
 # Runtime must not contact model hosters. Must be set before paddlex is imported.
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+
+log = logging.getLogger(__name__)
 
 
 class ModelsMissing(RuntimeError):
@@ -93,6 +96,7 @@ class OcrEngine:
         self.allow_download = settings.ocr_allow_download if allow_download is None else allow_download
         self._det = self._rec_ar = self._rec_en = None
         self._rec_pool: ThreadPoolExecutor | None = None
+        self.device: str | None = None  # e.g. "cpu", "gpu:0"; set when the models load
         # Paddle predictors aren't guaranteed thread-safe: one image at a time per engine (use OcrPool for more).
         self._lock = threading.RLock()
 
@@ -121,8 +125,14 @@ class OcrEngine:
         if self._det is not None:
             return self
         from paddleocr import TextDetection, TextRecognition
+        from paddlex.utils.device import get_default_device
 
-        common = {} if self.s.ocr_cpu_threads is None else {"cpu_threads": self.s.ocr_cpu_threads}
+        # OCR_DEVICE unset: GPU 0 if PaddlePaddle is the CUDA build and sees a GPU, else the CPU (PaddleOCR's own
+        # default, resolved here so that it can be reported).
+        device = self.s.ocr_device or get_default_device()
+        common = {"device": device}
+        if self.s.ocr_cpu_threads is not None:
+            common["cpu_threads"] = self.s.ocr_cpu_threads
         self._det = TextDetection(
             model_name=self.s.ocr_det_model, model_dir=self._model_dir(self.s.ocr_det_model),
             limit_side_len=self.s.ocr_det_limit_side_len, limit_type=self.s.ocr_det_limit_type, **common)
@@ -133,6 +143,8 @@ class OcrEngine:
                 model_name=self.s.ocr_rec_model_en, model_dir=self._model_dir(self.s.ocr_rec_model_en), **common)
             if self.s.ocr_parallel_rec:
                 self._rec_pool = ThreadPoolExecutor(1, thread_name_prefix="ocr-rec-en")
+        self.device = device
+        log.info("OCR models loaded on %s", device)
         return self
 
     def _recognize(self, rec, crops: list[np.ndarray]) -> list[Rec]:
@@ -207,6 +219,7 @@ class OcrPool:
         """Engines in the pool, loaded (models in RAM) and busy right now (admin dashboard)."""
         return {"engines": self.size, "loaded": sum(e.loaded for e in self.engines),
                 "busy": max(0, self.size - self._free.qsize()), "cpuThreads": self.engines[0].s.ocr_cpu_threads,
+                "device": next((e.device for e in self.engines if e.device), None),
                 "parallelRec": self.s.ocr_parallel_rec}
 
     def recognize(self, img: np.ndarray) -> OcrOutput:
