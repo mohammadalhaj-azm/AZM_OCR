@@ -223,6 +223,6 @@ per page. The reports hold your file names and (with `--save-text`) the read tex
 | `/v1/handwriting` 503 `handwriting_unavailable` | The message says why. `modelDownloaded: false` means run `handwriting-pull`. "no CUDA device" means the app container has no GPU: check `COMPOSE_FILE` in `.env` and `docker compose config` |
 | `ollama ps` shows CPU or a split | Not enough free VRAM: check `nvidia-smi`; keep `OLLAMA_MAX_LOADED_MODELS=1` |
 | Build fails | Paste the error. The Docker files haven't been built on a GPU host before this deployment |
-| Fanar: "adapter's weights were not applied (0 of N ...)" | The adapter's layer names don't match the model as this transformers/peft version builds it. It refuses rather than run the base model silently: send me the log line |
+| Fanar: "adapter's weights were not applied (0 of N ...)" | The adapter's layer names don't match the model as this transformers/peft version builds it (it refuses rather than run the base model silently). The old Qwen2.5-VL layout (`model.layers.N`, which the Fanar adapter uses) is mapped on load since this was fixed: `git pull`, `docker compose build app`, `docker compose up -d`. Still there: send the log line |
 | Fanar: `4bit needs a CUDA GPU`, or a bitsandbytes error at load | The app container has no GPU (see above), or bitsandbytes doesn't fit this CUDA/driver: send the log (`docker compose logs app`) |
 | `400 unknown_model` | `HANDWRITING_MODELS_FILE` isn't set in `.env` (only one model then), or a typo in `model` |

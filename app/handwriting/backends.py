@@ -175,6 +175,22 @@ def adapter_applied(named_params) -> tuple[int, int]:
     return total, nonzero
 
 
+# transformers >= 4.52 moved Qwen2-VL / Qwen2.5-VL's text layers from `model.*` to `model.language_model.*` and the
+# vision tower from `visual.*` to `model.visual.*`. Base checkpoints are renamed on load by transformers, adapters are
+# not: an adapter trained on the old layout (e.g. the Fanar HTR LoRA: `base_model.model.model.layers.N...`) matches no
+# layer. This is the mapping those transformers versions used (`_checkpoint_conversion_mapping`), which PEFT applies
+# to the adapter's keys after stripping its `base_model.model.` prefix. Keys already in the new layout don't match it.
+QWEN_VL_ADAPTER_KEY_MAPPING = {
+    r"^visual": "model.visual",
+    r"^model(?!\.(language_model|visual))": "model.language_model",
+}
+
+
+def adapter_key_mapping(param_names) -> dict[str, str] | None:
+    """The key mapping for an old-layout adapter, when the loaded model has the new layout; None otherwise."""
+    return QWEN_VL_ADAPTER_KEY_MAPPING if any(n.startswith("model.language_model.") for n in param_names) else None
+
+
 def load_transformers(s: Settings) -> Loaded:
     if not deps_installed(s):
         raise HandwritingUnavailable(f"the handwriting model needs {', '.join(required_packages(s))}: "
@@ -214,7 +230,8 @@ def load_transformers(s: Settings) -> Loaded:
     if adapter:
         from peft import PeftModel
 
-        model = PeftModel.from_pretrained(model, adapter)
+        mapping = adapter_key_mapping(n for n, _ in model.named_parameters())
+        model = PeftModel.from_pretrained(model, adapter, key_mapping=mapping)
         total, nonzero = adapter_applied(model.named_parameters())
         if total == 0 or nonzero < total:
             log.error("handwriting adapter not applied lora_b=%d nonzero=%d", total, nonzero)

@@ -840,7 +840,8 @@ Each entry overrides `HANDWRITING_*` values (`model`, `adapter`, `quantization`,
 Unknown keys fail the start. `download-handwriting-model` downloads every model and adapter in the file (needs
 `--extra handwriting-cuda` for 4-bit: `peft` + `bitsandbytes`). An adapter whose weights don't fit the model would load
 as a silent no-op, so loading checks that every LoRA layer received its weights and refuses otherwise
-(`handwriting_unavailable`). Models load on first use and stay loaded; one request at a time for all of them.
+(`handwriting_unavailable`). Adapters saved with the Qwen2.5-VL layer names of transformers < 4.52 (`model.layers.N`,
+as the Fanar one) are renamed to the current layout (`model.language_model.layers.N`) on load. Models load on first use and stay loaded; one request at a time for all of them.
 `GET /health/handwriting` lists each model's status under `models`.
 ```bash
 curl -H "X-Api-Key: $KEY" -F "file=@page.jpg" -F model=fanar http://127.0.0.1:8000/v1/handwriting

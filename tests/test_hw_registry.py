@@ -292,6 +292,81 @@ def test_adapter_applied_counts_zero_lora_b():
     assert adapter_applied([("w", np.ones(2))]) == (0, 0)  # no LoRA layers at all
 
 
+def peft_remap(key: str, mapping: dict) -> str:
+    """What PEFT (load_peft_weights) does with key_mapping: strip `base_model.model.`, first matching pattern wins."""
+    import re
+    key = key.removeprefix("base_model.model.")
+    for pattern, replacement in mapping.items():
+        new, n = re.subn(pattern, replacement, key)
+        if n:
+            return "base_model.model." + new
+    return "base_model.model." + key
+
+
+def test_old_layout_adapter_keys_are_mapped_to_the_new_qwen_vl_layout():
+    new_layout = ["model.visual.blocks.0.attn.qkv.weight", "model.language_model.layers.0.mlp.up_proj.weight",
+                  "lm_head.weight"]
+    mapping = hw_backends.adapter_key_mapping(new_layout)
+    assert mapping is not None
+    # the Fanar adapter's file layout (seen in its safetensors header)
+    assert peft_remap("base_model.model.model.layers.0.mlp.down_proj.lora_A.weight", mapping) == \
+        "base_model.model.model.language_model.layers.0.mlp.down_proj.lora_A.weight"
+    assert peft_remap("base_model.model.model.layers.27.self_attn.q_proj.lora_B.weight", mapping) == \
+        "base_model.model.model.language_model.layers.27.self_attn.q_proj.lora_B.weight"
+    assert peft_remap("base_model.model.visual.blocks.0.mlp.up_proj.lora_A.weight", mapping) == \
+        "base_model.model.model.visual.blocks.0.mlp.up_proj.lora_A.weight"
+    for already_new in ("base_model.model.model.language_model.layers.0.mlp.up_proj.lora_A.weight",
+                        "base_model.model.model.visual.blocks.0.mlp.up_proj.lora_A.weight",
+                        "base_model.model.lm_head.lora_A.weight"):
+        assert peft_remap(already_new, mapping) == already_new
+    # a model that still has the old layout: nothing to map
+    assert hw_backends.adapter_key_mapping(["model.layers.0.mlp.up_proj.weight", "visual.blocks.0.x"]) is None
+
+
+def test_old_layout_adapter_loads_into_a_tiny_qwen_vl(tmp_path):
+    """End to end with real PEFT and transformers on a random tiny model: without the mapping no LoRA weight loads
+    (the error seen on the server: 0 of 196), with it every one does, with the file's values."""
+    torch = pytest.importorskip("torch")
+    peft = pytest.importorskip("peft")
+    transformers = pytest.importorskip("transformers")
+    from safetensors.torch import save_file
+
+    cfg = transformers.Qwen2_5_VLConfig(
+        text_config=dict(hidden_size=64, intermediate_size=128, num_hidden_layers=2, num_attention_heads=4,
+                         num_key_value_heads=2, vocab_size=256,
+                         rope_scaling={"type": "mrope", "mrope_section": [2, 3, 3]}),
+        vision_config=dict(depth=1, hidden_size=32, intermediate_size=64, num_heads=2, out_hidden_size=64,
+                           fullatt_block_indexes=[0]))
+    dims = {"self_attn.q_proj": (64, 64), "self_attn.k_proj": (64, 32), "self_attn.v_proj": (64, 32),
+            "self_attn.o_proj": (64, 64), "mlp.gate_proj": (64, 128), "mlp.up_proj": (64, 128),
+            "mlp.down_proj": (128, 64)}
+    weights = {}
+    for i in range(2):
+        for m, (fin, fout) in dims.items():
+            weights[f"base_model.model.model.layers.{i}.{m}.lora_A.weight"] = torch.randn(16, fin)
+            weights[f"base_model.model.model.layers.{i}.{m}.lora_B.weight"] = torch.randn(fout, 16)
+    tmp = tmp_path
+    (tmp / "adapter_config.json").write_text(json.dumps({
+        "peft_type": "LORA", "task_type": "CAUSAL_LM", "r": 16, "lora_alpha": 32, "base_model_name_or_path": "tiny",
+        "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "layers.0.mlp.gate_proj", "layers.0.mlp.up_proj",
+                           "layers.0.mlp.down_proj", "layers.1.mlp.gate_proj", "layers.1.mlp.up_proj",
+                           "layers.1.mlp.down_proj"]}))
+    save_file(weights, str(tmp / "adapter_model.safetensors"))
+
+    def load(with_mapping):
+        base = transformers.Qwen2_5_VLForConditionalGeneration(cfg)
+        mapping = hw_backends.adapter_key_mapping(n for n, _ in base.named_parameters()) if with_mapping else None
+        return peft.PeftModel.from_pretrained(base, str(tmp), key_mapping=mapping)
+
+    with pytest.warns(UserWarning):  # PEFT warns about the unmatched keys
+        assert adapter_applied(load(False).named_parameters()) == (14, 0)
+    model = load(True)
+    assert adapter_applied(model.named_parameters()) == (14, 14)
+    p = dict(model.named_parameters())
+    assert torch.equal(p["base_model.model.model.language_model.layers.1.mlp.down_proj.lora_B.default.weight"],
+                       weights["base_model.model.model.layers.1.mlp.down_proj.lora_B.weight"])
+
+
 def test_required_packages(tmp_path):
     assert required_packages(make_settings(tmp_path)) == ["torch", "transformers"]
     s = make_settings(tmp_path, handwriting_adapter="org/lora", handwriting_quantization="4bit")
