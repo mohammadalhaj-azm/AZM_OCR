@@ -114,6 +114,34 @@ class Settings(BaseSettings):
     handwriting_warmup: bool = False  # load the model at startup instead of on the first request
     handwriting_prompt: str = ""  # empty = the prompt the model was fine-tuned with (app/handwriting/backends.py)
 
+    # Extract-and-answer (experimental, POST /v1/extract-and-answer; see app/answer): pages are routed to PaddleOCR
+    # or the handwriting model, then the text LLM corrects them, lists what a person should review, and answers the
+    # caller's questions from the document only.
+    answer_enabled: bool = True  # off = the endpoint answers 503 answer_unavailable
+    answer_max_pages: int = 20  # handwriting is slow: about a minute or more per page on CPU
+    answer_max_questions: int = 10
+    answer_max_question_chars: int = 500
+    answer_llm_model: str = ""  # empty = LLM_TEXT_MODEL
+    answer_timeout_s: float = 300.0  # per LLM call (one per page chunk, one for the questions)
+    answer_max_tokens: int = 4096  # per LLM call; an output cut off at this length is not used
+    # Page text is corrected in chunks of at most this many characters (Ollama's context window is set on the server,
+    # OLLAMA_CONTEXT_LENGTH, and silently truncates longer input)
+    answer_chunk_chars: int = 3000
+    answer_context_chars: int = 20000  # questions are answered from at most this much (corrected) text
+    answer_keep_max_side: int = 2000  # page images kept for the handwriting model / vision are downscaled to this
+    # Routing of scanned pages and images. STARTING VALUES, NOT CALIBRATED: measure them on your own documents with
+    # eval/run_routing_eval.py. Confidences are PaddleOCR's recognition scores (0-1).
+    routing_low_line_conf: float = 0.80  # a recognized text box below this counts as low-confidence
+    routing_printed_min_conf: float = 0.90  # printed: mean confidence at least this ...
+    routing_printed_max_low_share: float = 0.15  # ... and at most this share of low-confidence boxes
+    routing_handwritten_max_conf: float = 0.70  # handwritten: mean confidence below this ...
+    routing_min_kept_share: float = 0.50  # ... or fewer than this share of detected boxes could be read at all
+    routing_vision: bool = True  # unclear pages are classified by LLM_VISION_MODEL (printed/handwritten/mixed)
+    # Unclear page and no vision verdict: both = run both engines and keep both readings (handwriting first);
+    # handwriting / printed = that engine only. The page is marked `uncertain` in every case.
+    routing_uncertain_fallback: Literal["both", "handwriting", "printed"] = "both"
+    route_printed_arabic: Literal["paddle", "handwriting"] = "paddle"  # engine for printed Arabic scans
+
     # Detection
     id_patterns_path: Path = Path("config/id_patterns.yaml")
 

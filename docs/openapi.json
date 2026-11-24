@@ -430,6 +430,163 @@
         ]
       }
     },
+    "/v1/extract-and-answer": {
+      "post": {
+        "tags": [
+          "experimental"
+        ],
+        "summary": "Experimental: extract text (printed and handwritten), correct it, flag what needs review and answer questions from the document (async job)",
+        "description": "Every page is routed: text layers are taken as they are; scanned pages and images are read by PaddleOCR, and pages that are handwritten or mixed go to the handwriting model (the result's `pages[].route` says why, and `uncertain` when it is not clear). The local text LLM then corrects and formats the text without changing numbers, dates or IDs, lists what a person should review, and answers the `questions` from the document only, with page citations. Questions are optional: without them the job only extracts and corrects. Poll `GET /v1/jobs/{jobId}` (or use `callbackUrl`). Slow: handwriting takes about a minute or more per page on CPU. At most `ANSWER_MAX_PAGES` pages. Builds on the experimental handwriting model, so it may change while it is evaluated.",
+        "operationId": "extract_and_answer_v1_extract_and_answer_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Retry-safe uploads: the same key, file and options return the same job (within RESULT_TTL_S)",
+              "title": "Idempotency-Key"
+            },
+            "description": "Retry-safe uploads: the same key, file and options return the same job (within RESULT_TTL_S)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_extract_and_answer_v1_extract_and_answer_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
     "/v1/jobs/{job_id}": {
       "get": {
         "summary": "Job status, and the result when done",
@@ -772,6 +929,164 @@
   },
   "components": {
     "schemas": {
+      "Answer": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "answered",
+              "not_found",
+              "unavailable"
+            ],
+            "title": "Status",
+            "description": "not_found: the document doesn't contain it; unavailable: the text model could not be used"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer",
+            "description": "From the document only, in the question's language"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array",
+            "title": "Citations"
+          },
+          "needsReview": {
+            "type": "boolean",
+            "title": "Needsreview",
+            "description": "A citation could not be verified, overlaps a review item or an uncertain page, the answer has no citation, or only part of the document was read"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question",
+          "status",
+          "answer",
+          "citations",
+          "needsReview"
+        ],
+        "title": "Answer"
+      },
+      "Body_extract_and_answer_v1_extract_and_answer_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "questions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Questions",
+            "description": "A question about the document; repeat the field for several (at most ANSWER_MAX_QUESTIONS)"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode",
+            "description": "auto (default): route each page; printed / handwritten: read every page with that engine (handwritten also renders PDF pages that have a text layer)"
+          },
+          "correct": {
+            "type": "boolean",
+            "title": "Correct",
+            "description": "false: no LLM correction (extraction, routing and questions only)",
+            "default": true
+          },
+          "callbackUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callbackurl",
+            "description": "Webhook URL (host must be allow-listed)"
+          },
+          "externalId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Externalid",
+            "description": "Your reference, echoed in the job and webhook (at most 128 characters)"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata",
+            "description": "JSON object echoed in the job and webhook (at most 2048 bytes)"
+          },
+          "includeBoxes": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Includeboxes",
+            "description": "Add PaddleOCR's `lines` [{text, confidence, bbox}] and the image size to OCR pages"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile",
+            "description": "Processing profile: one of your client's (default: its first)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_extract_and_answer_v1_extract_and_answer_post"
+      },
       "Body_extract_text_v1_extract_post": {
         "properties": {
           "file": {
@@ -897,6 +1212,83 @@
           "file"
         ],
         "title": "Body_upload_v1_documents_post"
+      },
+      "Change": {
+        "properties": {
+          "original": {
+            "type": "string",
+            "title": "Original",
+            "description": "Words of the original text (empty: words were inserted)"
+          },
+          "corrected": {
+            "type": "string",
+            "title": "Corrected",
+            "description": "Words of the corrected text (empty: words were removed)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "original",
+          "corrected"
+        ],
+        "title": "Change"
+      },
+      "Citation": {
+        "properties": {
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "quote": {
+            "type": "string",
+            "title": "Quote",
+            "description": "Supporting text, as quoted by the LLM"
+          },
+          "verified": {
+            "type": "boolean",
+            "title": "Verified",
+            "description": "The quote was found on that page"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page",
+          "quote",
+          "verified"
+        ],
+        "title": "Citation"
+      },
+      "Correction": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "done",
+              "partial",
+              "skipped",
+              "unavailable"
+            ],
+            "title": "Status",
+            "description": "partial: some parts kept their original text (see review); skipped: correct=false"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "model"
+        ],
+        "title": "Correction"
       },
       "ErrorDetail": {
         "properties": {
@@ -1178,6 +1570,51 @@
         "title": "HandwritingResult",
         "description": "Experimental handwriting OCR result. `languages` lists `ar`/`en` by amount of text."
       },
+      "HandwritingUsed": {
+        "properties": {
+          "backend": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "transformers",
+                  "openai"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "The handwriting model (Hugging Face id, local folder or served name)"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device",
+            "description": "cpu / cuda for the transformers backend; null for openai"
+          }
+        },
+        "type": "object",
+        "title": "HandwritingUsed"
+      },
       "IdDetectionResult": {
         "properties": {
           "isId": {
@@ -1390,6 +1827,82 @@
               }
             ]
           },
+          "correctedText": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correctedtext",
+            "description": "Extract-and-answer: all pages' corrected text; null when the text was not corrected"
+          },
+          "routing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ReviewItem"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review"
+          },
+          "correction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Correction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "answers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Answer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answers"
+          },
+          "warnings": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "const": "context_truncated"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warnings",
+            "description": "context_truncated: the questions were answered from the first pages only"
+          },
           "timingsMs": {
             "anyOf": [
               {
@@ -1441,7 +1954,7 @@
           "status"
         ],
         "title": "JobView",
-        "description": "`status` queued/processing/done/failed. When done, the result fields are included; when failed, `error`.\n`webhook` is present when a callbackUrl was given."
+        "description": "`status` queued/processing/done/failed. When done, the result fields are included; when failed, `error`.\n`webhook` is present when a callbackUrl was given. Jobs of POST /v1/extract-and-answer (experimental) also have\n`correctedText`, `routing`, `review`, `correction`, and `answers` when questions were asked."
       },
       "Line": {
         "properties": {
@@ -1761,6 +2274,95 @@
             ],
             "title": "Lines",
             "description": "OCR pages with includeBoxes: lines in reading order"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "text_layer",
+                  "paddleocr",
+                  "handwriting"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine",
+            "description": "Extract-and-answer: the engine whose reading is `text`"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Route"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Extract-and-answer: how the page was routed, and why"
+          },
+          "readings": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Reading"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Readings",
+            "description": "Extract-and-answer: every engine's reading (mixed and uncertain pages have two)"
+          },
+          "correctedText": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correctedtext",
+            "description": "Extract-and-answer: the LLM's corrected, formatted text; null when not corrected"
+          },
+          "changes": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Change"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changes",
+            "description": "Extract-and-answer: word-level differences between text and correctedText, computed by the service (not reported by the LLM)"
+          },
+          "warnings": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "handwriting_unavailable",
+                    "handwriting_busy"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warnings",
+            "description": "Extract-and-answer: the handwriting model could not read the page"
           }
         },
         "type": "object",
@@ -1769,7 +2371,8 @@
           "method",
           "text"
         ],
-        "title": "Page"
+        "title": "Page",
+        "description": "A page of the result. The fields from `engine` on are only in extract-and-answer results (experimental), where\n`text` is the primary engine's reading."
       },
       "Processing": {
         "properties": {
@@ -1832,6 +2435,28 @@
             ],
             "title": "Vision"
           },
+          "handwriting": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HandwritingUsed"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Extract-and-answer: the handwriting model, when it read a page"
+          },
+          "routing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingUsed"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Extract-and-answer: the routing settings, when a page was routed"
+          },
           "withheld": {
             "anyOf": [
               {
@@ -1858,6 +2483,398 @@
         ],
         "title": "Processing",
         "description": "What produced this result, for audits: the service version, the processing profile, and the OCR models, rules\nfile version (start of its SHA-256) and LLMs that were actually used. A part that wasn't used is left out."
+      },
+      "Reading": {
+        "properties": {
+          "engine": {
+            "type": "string",
+            "enum": [
+              "text_layer",
+              "paddleocr",
+              "handwriting"
+            ],
+            "title": "Engine"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text",
+            "description": "As the engine read it"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence",
+            "description": "PaddleOCR's average confidence; always null for the handwriting model and text layers (no calibrated confidence exists)"
+          },
+          "warnings": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "truncated",
+                "repetition_loop",
+                "blank"
+              ]
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "engine",
+          "text",
+          "confidence",
+          "warnings"
+        ],
+        "title": "Reading"
+      },
+      "ReviewItem": {
+        "properties": {
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page",
+            "description": "null: about the whole document"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote",
+            "description": "The text concerned, as in the original; null for page-level items"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion",
+            "description": "A proposed reading (from the LLM), or null"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "illegible",
+              "ambiguous",
+              "possibly_misread",
+              "inconsistent",
+              "name",
+              "low_confidence",
+              "model_warning",
+              "routing",
+              "protected_value",
+              "unavailable"
+            ],
+            "title": "Category"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "llm",
+              "ocr_confidence",
+              "handwriting",
+              "routing",
+              "readings",
+              "protected_value"
+            ],
+            "title": "Source",
+            "description": "llm: flagged by the text model; the others are checks of the service itself"
+          },
+          "located": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Located",
+            "description": "The quote was found in the original page text (false: the LLM's quote doesn't match it); null without a quote"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence",
+            "description": "PaddleOCR confidence of the line (ocr_confidence items)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page",
+          "quote",
+          "suggestion",
+          "reason",
+          "category",
+          "source",
+          "located",
+          "confidence"
+        ],
+        "title": "ReviewItem",
+        "description": "Something a person should check. Never a guess presented as fact: `suggestion` is only a proposal."
+      },
+      "Route": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "printed",
+              "handwritten",
+              "mixed",
+              "no_text",
+              "unknown"
+            ],
+            "title": "Kind",
+            "description": "unknown: unclear from PaddleOCR's signals and no vision verdict"
+          },
+          "decidedBy": {
+            "type": "string",
+            "enum": [
+              "text_layer",
+              "ocr_signals",
+              "vision",
+              "override",
+              "fallback"
+            ],
+            "title": "Decidedby",
+            "description": "override: the request's `mode`; fallback: ROUTING_UNCERTAIN_FALLBACK applied"
+          },
+          "uncertain": {
+            "type": "boolean",
+            "title": "Uncertain",
+            "description": "The kind is not known: review the page; both readings may be kept"
+          },
+          "engines": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "text_layer",
+                "paddleocr",
+                "handwriting"
+              ]
+            },
+            "type": "array",
+            "title": "Engines",
+            "description": "Engines whose readings were kept, the primary one first"
+          },
+          "signals": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RouteSignals"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null for text-layer pages"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons",
+            "description": "Short reasons (from the signals, or the vision model's own)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "decidedBy",
+          "uncertain",
+          "engines",
+          "signals",
+          "reasons"
+        ],
+        "title": "Route"
+      },
+      "RouteSignals": {
+        "properties": {
+          "detected": {
+            "type": "integer",
+            "title": "Detected",
+            "description": "Text regions the detector found"
+          },
+          "read": {
+            "type": "integer",
+            "title": "Read",
+            "description": "Regions recognized with a score >= OCR_MIN_SCORE"
+          },
+          "meanConfidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meanconfidence",
+            "description": "Mean recognition confidence 0-1; null when nothing was read"
+          },
+          "lowConfidenceShare": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lowconfidenceshare",
+            "description": "Share of read regions below ROUTING_LOW_LINE_CONF"
+          },
+          "inkRatio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inkratio",
+            "description": "Ink share of the page; only measured when no text was detected"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detected",
+          "read",
+          "meanConfidence",
+          "lowConfidenceShare",
+          "inkRatio"
+        ],
+        "title": "RouteSignals",
+        "description": "PaddleOCR's numbers for a scanned page or image (what the routing decided on)."
+      },
+      "RoutingSummary": {
+        "properties": {
+          "document": {
+            "type": "string",
+            "enum": [
+              "printed",
+              "handwritten",
+              "mixed",
+              "no_text",
+              "unknown"
+            ],
+            "title": "Document"
+          },
+          "pages": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Pages",
+            "description": "Pages per kind"
+          },
+          "uncertainPages": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Uncertainpages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document",
+          "pages",
+          "uncertainPages"
+        ],
+        "title": "RoutingSummary"
+      },
+      "RoutingUsed": {
+        "properties": {
+          "lowLineConf": {
+            "type": "number",
+            "title": "Lowlineconf"
+          },
+          "printedMinConf": {
+            "type": "number",
+            "title": "Printedminconf"
+          },
+          "printedMaxLowShare": {
+            "type": "number",
+            "title": "Printedmaxlowshare"
+          },
+          "handwrittenMaxConf": {
+            "type": "number",
+            "title": "Handwrittenmaxconf"
+          },
+          "minKeptShare": {
+            "type": "number",
+            "title": "Minkeptshare"
+          },
+          "uncertainFallback": {
+            "type": "string",
+            "enum": [
+              "both",
+              "handwriting",
+              "printed"
+            ],
+            "title": "Uncertainfallback"
+          },
+          "printedArabic": {
+            "type": "string",
+            "enum": [
+              "paddle",
+              "handwriting"
+            ],
+            "title": "Printedarabic"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lowLineConf",
+          "printedMinConf",
+          "printedMaxLowShare",
+          "handwrittenMaxConf",
+          "minKeptShare",
+          "uncertainFallback",
+          "printedArabic"
+        ],
+        "title": "RoutingUsed",
+        "description": "The routing settings of extract-and-answer (ROUTING_*). Starting values, not calibrated: see\neval/run_routing_eval.py."
       },
       "WebhookStatus": {
         "properties": {

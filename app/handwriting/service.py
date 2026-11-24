@@ -112,6 +112,25 @@ class HandwritingService:
             "model": {**info, "maxPixels": self.s.handwriting_max_pixels, "segmenter": self.segmenter.name},
         }
 
+    def transcribe_image(self, img: np.ndarray, wait_s: float | None = None) -> dict:
+        """One page image (BGR), for the main pipeline (extract-and-answer jobs): {text, confidence (null), ms,
+        skipped, warnings}. Unlike `transcribe`, it waits for the one-at-a-time slot, at most `wait_s` seconds
+        (None = HANDWRITING_TIMEOUT_S). Raises HandwritingUnavailable or HandwritingBusy (waited too long)."""
+        if not self.enabled or self.backend is None:
+            raise HandwritingUnavailable("handwriting OCR is disabled (HANDWRITING_ENABLED=false)")
+        if not self._slot.acquire(timeout=self.s.handwriting_timeout_s if wait_s is None else wait_s):
+            raise HandwritingBusy()
+        try:
+            page = self._page(0, img)
+        finally:
+            self._slot.release()
+        page.pop("page")
+        return page
+
+    def model_info(self) -> dict:
+        """What read the pages (provenance): backend, model name, device."""
+        return self.backend.info() if self.backend is not None else {}
+
     def _page(self, number: int, img: np.ndarray) -> dict:
         t0 = time.perf_counter()
         page = {"page": number, "text": "", "confidence": None, "ms": 0, "skipped": None, "warnings": []}

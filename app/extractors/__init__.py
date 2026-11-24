@@ -2,6 +2,8 @@
 
 import threading
 import time
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
@@ -11,13 +13,18 @@ from app.extractors.filetype import DOCX, IMAGE_TYPES, PDF, FileRejected, valida
 from app.extractors.image import decode_images
 from app.extractors.pdf import extract_pdf
 from app.normalize import clean_text, detect_languages, normalize_for_match
-from app.ocr.engine import OcrEngine
+from app.ocr.engine import OcrEngine, OcrOutput
 from app.schemas import ExtractionResult, PageResult
 
 __all__ = ["FileRejected", "extract"]
 
 
-def extract(data: bytes, settings: Settings, engine: OcrEngine) -> ExtractionResult:
+Inspect = Callable[[np.ndarray, OcrOutput], Any]
+
+
+def extract(data: bytes, settings: Settings, engine: OcrEngine, inspect: Inspect | None = None) -> ExtractionResult:
+    """inspect: called with every OCR'd image and its OCR output (on the OCR thread); what it returns is kept on the
+    page (`PageResult.inspection`). Used by extract-and-answer routing; None changes nothing."""
     mime = validate_upload(data, settings.max_upload_bytes)
     t_start = time.perf_counter()
     ocr_ms = 0.0
@@ -41,8 +48,11 @@ def extract(data: bytes, settings: Settings, engine: OcrEngine) -> ExtractionRes
         with lock:
             ocr_ms += (time.perf_counter() - t0) * 1000
             ocr_pages += 1
-        return PageResult(page=0, method="ocr", text=out.text, confidence=out.confidence,
+        page = PageResult(page=0, method="ocr", text=out.text, confidence=out.confidence,
                           lines=out.lines, width=out.width or None, height=out.height or None)
+        if inspect is not None:
+            page._inspection = inspect(img, out)
+        return page
 
     if mime == PDF:
         pages = extract_pdf(data, settings, ocr_page, parallel=getattr(engine, "size", 1), on_render=remember)

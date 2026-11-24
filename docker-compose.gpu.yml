@@ -11,7 +11,8 @@
 #   docker compose up -d
 #
 # VRAM: Ollama keeps one model loaded (OLLAMA_MAX_LOADED_MODELS=1) next to the handwriting model once it is loaded.
-# Check the real usage with nvidia-smi before raising OLLAMA_MAX_LOADED_MODELS.
+# Check the real usage with nvidia-smi before raising OLLAMA_MAX_LOADED_MODELS. OLLAMA_CONTEXT_LENGTH (set in
+# docker-compose.yml for extract-and-answer) also takes VRAM; `ollama ps` shows whether a model still fits the GPU.
 
 x-gpu: &gpu
   resources:

@@ -75,7 +75,20 @@ def withhold(result: dict, profile: Profile) -> dict:
         for page in result.get("pages") or []:
             page["text"] = ""
             page.pop("lines", None)
+            for key in ("readings", "correctedText", "changes"):  # extract-and-answer results
+                if key in page:
+                    page[key] = None
         result["fullText"] = result["normalizedText"] = ""
+        if "correctedText" in result:  # extract-and-answer: everything that can quote the document
+            result["correctedText"] = None
+            result["review"] = [{**it, "quote": None, "suggestion": None,
+                                 "reason": "" if it.get("source") == "llm" else it.get("reason")}
+                                for it in result.get("review") or []]
+            for page in result.get("pages") or []:
+                if (page.get("route") or {}).get("decidedBy") == "vision":  # the vision model's own words
+                    page["route"]["reasons"] = []
+            for a in result.get("answers") or []:
+                a["answer"], a["citations"] = None, []
         det = result.get("idDetection")
         if det:  # the models' free-text reasons can quote the document; the rules' reasons can't
             det["reasons"] = [r for r in det.get("reasons", []) if r.startswith("rules:")]

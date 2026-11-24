@@ -861,6 +861,93 @@ don't rely on it until these steps pass:
    the same or the CER within noise.
 3. Then record the exact vLLM version and command here.
 
+## Extract and answer (experimental)
+
+`POST /v1/extract-and-answer` combines both OCR engines and the local text LLM in one **async job** (same queue,
+idempotency, webhooks, profiles and encrypted storage as `/v1/documents`; the result comes from `GET /v1/jobs/{id}`):
+1. **Routing, per page** (`app/answer/routing.py`). Text layers (PDF, DOCX) are taken as they are. Every scanned page
+   or image is read by PaddleOCR first. Its recognition scores settle the clear cases: **printed** goes to PaddleOCR,
+   **handwritten** goes to the handwriting model. A page they leave unclear (e.g. a printed form filled in by hand)
+   goes to the vision model (`LLM_VISION_MODEL`), which answers printed / handwritten / **mixed** / no text. A mixed
+   page is read by the handwriting model, and PaddleOCR's reading is kept next to it (`pages[].readings`), so printed
+   values can be cross-checked. Without a vision verdict, `ROUTING_UNCERTAIN_FALLBACK` applies (`both`: keep both
+   readings) and the page is marked `uncertain`, never silently filed as handwritten. `mode=printed|handwritten`
+   overrides the routing for a request. Printed Arabic stays on PaddleOCR (`ROUTE_PRINTED_ARABIC=paddle`; switch to
+   `handwriting` to try the handwriting model on it).
+2. **Correction** by the text LLM (`ANSWER_LLM_MODEL`, default `LLM_TEXT_MODEL`), one call per chunk of a page: it fixes
+   spelling, grammar and recognition errors, and lays the text out as lines, `label: value` fields and table rows,
+   without translating, summarizing or adding anything. **Numbers, dates, IDs, amounts and e-mail addresses never
+   reach the LLM:** they are replaced by placeholders and put back afterwards. If a reply drops, duplicates or invents
+   one, that part keeps its original text and gets a `protected_value` review item. Lines PaddleOCR read with low
+   confidence are marked for the LLM. `pages[].changes` lists every word it changed (computed by the service).
+3. **Review items** (`review[]`): what the LLM was unsure about (its quote is checked against the page: `located`),
+   plus the service's own checks: low-confidence lines, handwriting `truncated` / `repetition_loop`, uncertain
+   routes, values PaddleOCR read but the handwriting reading lacks, engines that were unavailable.
+4. **Questions** (optional; without them the job only extracts and corrects) are answered from the corrected text
+   only, with page citations. Each citation's quote is checked against that page (`verified`). Missing information
+   gives `status: not_found` and says so. `needsReview` marks answers whose citations can't be verified, touch a
+   review item or an uncertain page, or come from a document longer than `ANSWER_CONTEXT_CHARS` (`warnings:
+   ["context_truncated"]`).
+
+If the text LLM is down, the job still finishes: `correction.status: unavailable`, `correctedText: null`, answers
+`status: unavailable`. No confidence is invented: the handwriting model's readings have `confidence: null`, and no
+LLM-reported confidence is used anywhere.
+
+```powershell
+curl.exe -H "X-Api-Key: $env:KEY" -F "file=@D:\private\form.pdf" `
+  -F "questions=What is the applicant's name?" -F "questions=What is the total amount?" `
+  http://127.0.0.1:8000/v1/extract-and-answer
+# -> {"jobId":"..."}; then GET /v1/jobs/<jobId>?wait=30
+```
+The result (shape only, values are placeholders): the usual `file`, `pages`, `fullText`, `normalizedText`,
+`languages`, `timingsMs`, `processing`, plus:
+```json
+{"pages": [{"page": 1, "method": "ocr", "engine": "handwriting", "text": "...", "confidence": null,
+            "route": {"kind": "mixed", "decidedBy": "vision", "uncertain": false,
+                      "engines": ["handwriting", "paddleocr"], "signals": {"detected": 0, "read": 0,
+                      "meanConfidence": 0.0, "lowConfidenceShare": 0.0, "inkRatio": null}, "reasons": ["..."]},
+            "readings": [{"engine": "handwriting", "text": "...", "confidence": null, "warnings": []},
+                         {"engine": "paddleocr", "text": "...", "confidence": 0.0, "warnings": []}],
+            "correctedText": "...", "changes": [{"original": "...", "corrected": "..."}], "warnings": []}],
+ "correctedText": "...",
+ "routing": {"document": "mixed", "pages": {"mixed": 1}, "uncertainPages": []},
+ "review": [{"page": 1, "quote": "...", "suggestion": null, "reason": "...", "category": "ambiguous",
+             "source": "llm", "located": true, "confidence": null}],
+ "correction": {"status": "done", "model": "qwen3:8b"},
+ "answers": [{"question": "...", "status": "answered", "answer": "...",
+              "citations": [{"page": 1, "quote": "...", "verified": true}], "needsReview": false}]}
+```
+- **Scope** `documents`. A profile with `return_text: false` gets `403`. At most `ANSWER_MAX_PAGES` (20) pages,
+  `ANSWER_MAX_QUESTIONS` (10) questions of at most `ANSWER_MAX_QUESTION_CHARS` (500) characters.
+  `Idempotency-Key` covers the questions and options too (other questions with the same key: `409`).
+- **Speed:** not measured. Handwritten pages take about a minute or more each on CPU; every page also costs one or
+  more LLM calls (CPU: tens of seconds each).
+- **The handwriting model is shared** with `/v1/handwriting` (one page at a time): a job waits for it, and
+  `/v1/handwriting` answers `503 busy` meanwhile. Long jobs also hold up `/v1/documents` jobs at `WORKER_THREADS=1`.
+- **Context window:** Ollama's OpenAI-compatible API can't set the context length per request, and silently cuts
+  longer prompts. `docker-compose.yml` sets `OLLAMA_CONTEXT_LENGTH=16384` for `ANSWER_CHUNK_CHARS=3000` and
+  `ANSWER_CONTEXT_CHARS=20000`. Those character budgets are estimates for Arabic/English, **not verified**: check
+  `ollama ps` (CONTEXT, PROCESSOR) on the server, and lower the budgets if prompts don't fit.
+- **Known limits:** a scanned PDF with a scanner-made (junk) text layer is taken as printed (use `mode=handwritten`);
+  names are protected by the prompt and the change list, not by a mechanical check like numbers; mixed pages go to
+  the handwriting model whole (sending only the handwritten regions is a later option, `app/handwriting/regions.py`).
+
+### Calibrate the routing on your documents
+The `ROUTING_*` thresholds are **starting values, not calibrated**. Label real pages **outside** the repository and
+run:
+```csv
+file,label,verified_by,notes
+invoices/inv01.png,printed,reviewer-1,
+letters/hw03.jpg,handwritten,reviewer-1,
+forms/f12.pdf,mixed,reviewer-1,label applies to every page
+```
+```powershell
+uv run python -m eval.run_routing_eval D:\private\routing-samples            # PaddleOCR signals only
+uv run python -m eval.run_routing_eval D:\private\routing-samples --vision   # + the vision model for unclear pages
+```
+`eval/out/routing-<timestamp>/report.md` has the confusion matrix and PaddleOCR's confidence and low-confidence
+share per label (set the thresholds between the labels' ranges). It contains no document text.
+
 ## Docker deployment
 
 Docker is **not** needed for local development. For a server:
@@ -967,6 +1054,7 @@ its default). They are defined in `app/config.py`. The main groups:
 | Job store | `JOB_STORE` (`memory`/`postgres`), `DATABASE_URL`, `DB_POOL_SIZE`, `DB_POLL_S`, `JOB_STALE_S`, `JOB_MAX_ATTEMPTS`, `RESULT_ENCRYPTION_KEY`, `AUDIT_RETENTION_DAYS` |
 | Admin dashboard | `ADMIN_USERS_FILE`, `ADMIN_SESSION_SECRET`, `ADMIN_SESSION_HOURS`, `SAMPLE_INTERVAL_S`, `SAMPLE_PERSIST_S`, `SAMPLE_RETENTION_H`, `LOG_BUFFER_SIZE`, `LOG_RETENTION_DAYS`, `ALERT_*`, `CONFIG_POLL_S`, `EVAL_OUT_DIR` (see [Admin dashboard](#admin-dashboard)) |
 | Handwriting (experimental) | `HANDWRITING_ENABLED`, `HANDWRITING_BACKEND`, `HANDWRITING_MODEL`, `HANDWRITING_BASE_URL`, `HANDWRITING_MAX_PIXELS`, `HANDWRITING_MAX_PAGES`, `HANDWRITING_BLANK_CHECK`, ... (see [Handwriting OCR](#handwriting-ocr-experimental)) |
+| Extract and answer (experimental) | `ANSWER_ENABLED`, `ANSWER_MAX_PAGES`, `ANSWER_MAX_QUESTIONS`, `ANSWER_LLM_MODEL`, `ANSWER_CHUNK_CHARS`, `ANSWER_CONTEXT_CHARS`, `ROUTING_*` thresholds, `ROUTING_VISION`, `ROUTING_UNCERTAIN_FALLBACK`, `ROUTE_PRINTED_ARABIC` (see [Extract and answer](#extract-and-answer-experimental)) |
 | Webhooks | `WEBHOOK_SECRET`, `WEBHOOK_ALLOWED_HOSTS` (with `API_KEYS` only; per client in `CLIENTS_FILE`), `WEBHOOK_TIMEOUT_S`, `WEBHOOK_RETRY_WINDOW_S`, `WEBHOOK_BACKOFF_S`, `WEBHOOK_MAX_BACKOFF_S`, `WEBHOOK_RETRIES`, `WEBHOOK_THREADS` |
 
 ## Tests
@@ -974,6 +1062,7 @@ its default). They are defined in `app/config.py`. The main groups:
 uv run pytest                          # everything; live LLM tests run if Ollama is up (~2.5 min on CPU)
 $env:RUN_VISION_TESTS = '1'; uv run pytest tests/test_live_llm.py   # + the slow vision test
 $env:RUN_HANDWRITING_TESTS = '1'; uv run pytest tests/test_live_handwriting.py   # the handwriting model (slow; needs it downloaded)
+uv run pytest tests/test_live_answer.py   # extract-and-answer against the local Ollama (skipped if it is down)
 ```
 All test documents are synthetic, generated by `tests/synth.py`: fake names and numbers, the fictional ICAO
 state "UTO", and invoices and letters as non-ID samples. No real documents are in the repository.
@@ -982,7 +1071,8 @@ state "UTO", and invoices and letters as non-ID samples. No real documents are i
 ```
 app/            config.py, cli.py, extractors/, ocr/, normalize/, detection/, api/ (routes/, migrations/),
                 admin/ (dashboard: monitoring, alerts, configuration; static/ = its pages),
-                handwriting/ (experimental handwriting OCR: backends, guards, regions)
+                handwriting/ (experimental handwriting OCR: backends, guards, regions),
+                answer/ (experimental extract-and-answer: routing, LLM prompts, guards, service)
 config/         id_patterns.yaml (per-country ID regex, Phase 3), clients.example.yaml (client registry template),
                 admins.example.yaml (admin dashboard users)
 docs/           INTEGRATION*.md (for client teams), openapi.json (the API contract), CHANGELOG.md
@@ -990,5 +1080,6 @@ scripts/        check_env.py (environment smoke test), bench_ocr.py (OCR setting
                 client_key.py (API keys / hashes / webhook secrets for the client registry),
                 admin_user.py (admin password hashes, session secret)
 tests/          pytest; fixtures/synthetic/ holds generated fake documents only
-eval/           evaluation over real documents kept OUTSIDE the repo (Phase 5; run_handwriting_eval.py: handwriting CER/WER)
+eval/           evaluation over real documents kept OUTSIDE the repo (Phase 5; run_handwriting_eval.py: handwriting CER/WER;
+                run_routing_eval.py: printed/handwritten routing)
 ```

@@ -10,7 +10,8 @@ import re
 import threading
 import time
 from collections import deque
-from typing import Literal
+from collections.abc import Callable
+from typing import Literal, TypeVar
 
 import cv2
 import httpx
@@ -20,6 +21,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app.config import Settings
 
 log = logging.getLogger(__name__)
+T = TypeVar("T")
 
 DocType = Literal["national_id", "passport", "driver_license", "residence_permit", "other_id", "not_id"]
 DOC_TYPES = list(DocType.__args__)
@@ -228,22 +230,66 @@ class LlmClient:
     def _client_for(self, model: str) -> httpx.Client:
         return self.http_vision if model == self.s.llm_vision_model else self.http
 
-    def _chat(self, model: str, messages: list[dict], timeout: float) -> str:
+    def _post(self, model: str, messages: list[dict], timeout: float, schema: dict, schema_name: str,
+              max_tokens: int) -> tuple[str, str | None]:
+        """(content, finish_reason) of one chat completion constrained to a JSON schema."""
         body = {
             "model": model,
             "messages": messages,
             "temperature": 0,
-            "max_tokens": 400,
+            "max_tokens": max_tokens,
             "response_format": {"type": "json_schema",
-                                "json_schema": {"name": "id_detection", "schema": SCHEMA, "strict": True}},
+                                "json_schema": {"name": schema_name, "schema": schema, "strict": True}},
             **self.extra_body,  # e.g. {"reasoning_effort": "none"} for Ollama (disables Qwen3 thinking)
         }
         try:
             r = self._client_for(model).post("/chat/completions", json=body, timeout=timeout)
             r.raise_for_status()
-            return r.json()["choices"][0]["message"].get("content") or ""
-        except (httpx.HTTPError, ValueError, KeyError, IndexError) as e:
+            choice = r.json()["choices"][0]
+            return choice["message"].get("content") or "", choice.get("finish_reason")
+        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as e:
             raise LlmError(f"LLM request failed: {type(e).__name__}") from e
+
+    def _chat(self, model: str, messages: list[dict], timeout: float) -> str:
+        return self._post(model, messages, timeout, SCHEMA, "id_detection", 400)[0]
+
+    def chat_json(self, model: str, system: str, user_content, schema: dict, schema_name: str, timeout: float,
+                  max_tokens: int, parse: Callable[[dict], T]) -> T:
+        """A JSON reply of `model` matching `schema`, turned into a value by `parse` (which raises ValueError /
+        ValidationError / KeyError / TypeError for an unusable reply). One retry when the reply isn't valid JSON or
+        can't be parsed. An output cut off at max_tokens is never used (it would be incomplete). Raises LlmError;
+        its message never contains content. Counted in the admin dashboard's call statistics like ID detection."""
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user_content}]
+        t0 = time.perf_counter()
+        self.stats.begin(model)
+        retried, value, problem = False, None, None
+        try:
+            for attempt in range(2):
+                content, finish = self._post(model, messages, timeout, schema, schema_name, max_tokens)
+                if finish == "length":
+                    problem = "output cut off at max_tokens"
+                    break  # a retry would be cut off the same way
+                try:
+                    value = parse(json.loads(_FENCE.sub("", _THINK.sub("", content).strip())))
+                    break
+                except (json.JSONDecodeError, ValidationError, ValueError, KeyError, TypeError):
+                    problem = "invalid JSON twice"
+                    if attempt == 0:
+                        retried = True
+                        messages = messages + [
+                            {"role": "assistant", "content": content},
+                            {"role": "user", "content": "That reply was not valid JSON matching the required "
+                                                        "schema. Reply again with the JSON object only."}]
+        except LlmError as e:
+            self.stats.end(model, (time.perf_counter() - t0) * 1000, False, retried, str(e))
+            raise
+        ms = (time.perf_counter() - t0) * 1000
+        log.info("llm %s model=%s ms=%d retried=%s ok=%s", schema_name, model, ms, retried, value is not None)
+        if value is None:
+            self.stats.end(model, ms, False, retried, problem)
+            raise LlmError(f"LLM reply unusable: {problem}")
+        self.stats.end(model, ms, True, retried)
+        return value
 
     def _classify(self, model: str, system: str, user_content, timeout: float) -> Verdict:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user_content}]

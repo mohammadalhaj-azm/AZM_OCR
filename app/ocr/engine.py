@@ -39,6 +39,7 @@ class OcrOutput:
     lines: list[dict] = field(default_factory=list)
     width: int = 0  # input image size in pixels
     height: int = 0
+    detected: int = 0  # text regions the detector found; `boxes` holds those that were read (score >= OCR_MIN_SCORE)
 
 
 def available_cpus() -> int:
@@ -190,7 +191,8 @@ class OcrEngine:
             if merged is not None:
                 boxes.append(Box(poly, merged.text, merged.score))
         text, conf = page_text_and_confidence(boxes)
-        return OcrOutput(text, conf, boxes, line_items(boxes, scale, affine, width, height), width, height)
+        return OcrOutput(text, conf, boxes, line_items(boxes, scale, affine, width, height), width, height,
+                         detected=len(crops))
 
 
 class OcrPool:

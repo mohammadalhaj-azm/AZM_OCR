@@ -16,6 +16,11 @@ services:
       OLLAMA_NO_CLOUD: "1"
       OLLAMA_MAX_LOADED_MODELS: "1"
       OLLAMA_KEEP_ALIVE: "30m"
+      # Context window (tokens) of every model Ollama loads. The OpenAI-compatible API can't set it per request and a
+      # prompt longer than it is truncated SILENTLY. extract-and-answer needs room for a page chunk plus its
+      # corrected copy (ANSWER_CHUNK_CHARS) and for the questions' context (ANSWER_CONTEXT_CHARS). More context =
+      # more (V)RAM: check `ollama ps` (CONTEXT, PROCESSOR) after the first requests.
+      OLLAMA_CONTEXT_LENGTH: "16384"
     volumes:
       - ollama-models:/root/.ollama
     networks: [internal]

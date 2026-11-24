@@ -4,8 +4,8 @@ Events (table `ocr_audit_events` with PostgreSQL; the latest 10 000 in RAM with 
 
 | event | when | data |
 |---|---|---|
-| job.received | POST /v1/documents stored a job | endpoint, size, sha256, mimeType, callback, includeBoxes, |
-| | | idempotent, externalIdHash |
+| job.received | POST /v1/documents (or /v1/extract-and-answer) stored a job | endpoint, size, sha256, mimeType, |
+| | | callback, includeBoxes, idempotent, externalIdHash; extract-and-answer: questions (a count), mode, correct |
 | job.replayed | the same Idempotency-Key + file came again | sha256 |
 | job.started | a worker claimed the job | attempt, worker |
 | job.done / job.failed | processing ended | ms, attempt, result facts (below) / error |
@@ -22,7 +22,9 @@ Events (table `ocr_audit_events` with PostgreSQL; the latest 10 000 in RAM with 
 
 Every event has `at`, `client_id` (NULL for an unknown key), `job_id` and `request_id` (the X-Request-Id).
 Result facts: pages, pageMethods, languages, timingsMs, processing (versions and models), ocrConfidence,
-fallbacks, and for ID detection isId, docType, confidence, decidedBy, mrzFound, mrzValid.
+fallbacks, and for ID detection isId, docType, confidence, decidedBy, mrzFound, mrzValid; for extract-and-answer
+routing (document kind, pages per kind, uncertain pages, decidedBy counts), reviewItems, correction status and
+answers per status (counts only: never questions or answers).
 
 **Never stored:** document text, file names, MRZ fields, the LLM's free-text reasons (they can quote the document),
 caller metadata, or `externalId` in clear (only an HMAC, see `ref_hasher`).
@@ -117,6 +119,15 @@ def result_facts(result: dict) -> dict:
         out["idDetection"] = {"isId": det.get("isId"), "docType": det.get("docType"),
                               "confidence": det.get("confidence"), "decidedBy": det.get("decidedBy"),
                               "mrzFound": mrz is not None, "mrzValid": bool(mrz and mrz.get("valid"))}
+    routing = result.get("routing")
+    if routing:  # extract-and-answer: counts and statuses only
+        out["routing"] = {"document": routing.get("document"), "pages": routing.get("pages"),
+                          "uncertainPages": len(routing.get("uncertainPages") or []),
+                          "decidedBy": dict(Counter((p.get("route") or {}).get("decidedBy") for p in pages))}
+        out["reviewItems"] = len(result.get("review") or [])
+        out["correction"] = (result.get("correction") or {}).get("status")
+        if result.get("answers") is not None:
+            out["answers"] = dict(Counter(a.get("status") for a in result["answers"]))
     return {k: v for k, v in out.items() if v is not None}
 
 

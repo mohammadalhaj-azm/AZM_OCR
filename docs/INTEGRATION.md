@@ -23,6 +23,7 @@ All processing runs on our own servers. No document data is sent to any external
 | **Text only** | `POST /v1/extract` | Synchronous: the result comes back in the same response | ~2–3 s per scanned page, instant for text PDFs |
 | **Text + "is this an ID?"** | `POST /v1/documents` | Asynchronous: you get a `jobId`, then fetch the result | ~30–90 s per document (AI model on CPU) |
 | Text only, but the document has **more than 20 pages** | `POST /v1/documents` | Asynchronous | depends on page count |
+| **Handwritten or mixed** documents, corrected text, review items, **answers to your questions** (experimental) | `POST /v1/extract-and-answer` | Asynchronous | not measured yet: a minute or more per handwritten page on CPU |
 
 ---
 
@@ -145,6 +146,41 @@ Set your HTTP client timeout to about **120 s**.
 | `profile` | string | no | Same as in `/v1/extract` |
 
 Responses: `202 {"jobId": "<32 hex chars>"}`. Errors: `400`, `401`, `409`, `413`, `415`, `422`, `503 queue_full`.
+
+### `POST /v1/extract-and-answer` (experimental): printed + handwritten text, correction, answers, asynchronous
+
+Reads every page with the right engine (printed text: OCR; handwritten or mixed pages: the handwriting model). The
+local AI model then corrects and formats the text, lists what a person should check, and answers your questions
+from the document only. **Experimental:** it may change while it is evaluated (see [§14](#14-api-versioning-and-compatibility)).
+
+Same fields as `/v1/documents` (`file`, `callbackUrl`, `externalId`, `metadata`, `includeBoxes`, `profile`,
+`Idempotency-Key`), plus:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `questions` | string, repeatable | no | A question about the document; send the field once per question (at most 10, 500 characters each). Without questions, the job only extracts and corrects |
+| `mode` | `auto`/`printed`/`handwritten` | no (default `auto`) | `auto` routes each page. `printed` / `handwritten` read every page with that engine (`handwritten` also for PDF pages that have a text layer) |
+| `correct` | `true`/`false` | no (default `true`) | `false`: no AI correction (extraction, routing and answers only) |
+
+Responses: `202 {"jobId": ...}`, then the result from `GET /v1/jobs/{jobId}` (below). Errors as for `/v1/documents`,
+plus `403` for a profile that returns no text, `409` when an `Idempotency-Key` is reused with other questions or
+options, and `503 answer_unavailable` when we have turned it off. Needs the `documents` scope. At most 20 pages.
+It is slow: about a minute or more per handwritten page on CPU, plus the AI calls.
+
+The result has the usual fields; `pages[].text` and `fullText` are the text **as read**. In addition:
+- `pages[].engine`, `pages[].route` (`kind`: printed / handwritten / mixed / no_text / unknown; `decidedBy`;
+  `uncertain`), `pages[].readings` (each engine's reading: mixed and uncertain pages have two),
+  `pages[].correctedText` and `pages[].changes` (every word the correction changed);
+- `correctedText`: all pages corrected, or `null` when the text was not corrected (`correction.status`:
+  `done` / `partial` / `skipped` / `unavailable`);
+- `review[]`: what a person should check (`page`, `quote`, `suggestion`, `reason`, `category`, `source`). **Show
+  these to a reviewer**, especially `protected_value`, `inconsistent` and `routing` items;
+- `answers[]` (only with questions): `status` `answered` / `not_found` / `unavailable`, `answer`, `citations[]`
+  (`page`, `quote`, `verified`: the quote was found on that page) and `needsReview`. Treat an answer with
+  `needsReview: true` as a hint, not a fact.
+
+Numbers, dates and IDs are never changed by the correction. Handwriting has no confidence score (`confidence:
+null`), and none is made up.
 
 ### `GET /v1/jobs/{jobId}[?wait=N]`: status and result
 
@@ -503,7 +539,7 @@ Many systems depend on this API, so it changes by fixed rules.
 - `/v1` in the path is the **contract**. It only changes for breaking changes (see below).
 - The **service version** (`info.version` in the spec, `version` in `/health`, `processing.version` in every result) is the release that served you. It changes with every release; quote it when you report a problem.
 
-**Experimental endpoints** (tagged `experimental` in the spec, today only `POST /v1/handwriting`) are excluded: they may change or disappear while they are evaluated. Don't build production flows on them yet.
+**Experimental endpoints** (tagged `experimental` in the spec, today `POST /v1/handwriting` and `POST /v1/extract-and-answer`, with the result fields only the latter produces) are excluded: they may change or disappear while they are evaluated. Don't build production flows on them yet.
 
 **Within `/v1`, changes are only additive:**
 - new endpoints, new optional request fields and headers;

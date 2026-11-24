@@ -12,7 +12,15 @@ Changes that client systems can see. The API contract is `/v1`, and within it ch
   operator turns it on (`503 handwriting_unavailable` otherwise), needs the `extract` scope, and has its own result
   model (`HandwritingResult`: `pages[].confidence` is always `null`). `GET /health/handwriting` reports its status.
 - New error code `handwriting_unavailable` (503), returned by this endpoint only.
-- Nothing changes in `/v1/extract`, `/v1/documents`, `/v1/jobs` or their results.
+- **`POST /v1/extract-and-answer`** (experimental, async job, `documents` scope): routes each page to printed-text OCR
+  or the handwriting model, corrects and formats the text with the local AI model (numbers, dates and IDs are never
+  changed), lists review items, and answers optional `questions` from the document only, with verified page
+  citations. Results come from `GET /v1/jobs/{id}` with these additional fields: `correctedText`, `routing`,
+  `review`, `correction`, `answers`, `warnings`, and per page `engine`, `route`, `readings`, `correctedText`,
+  `changes`, `warnings`. They appear only in this endpoint's results.
+- New error code `answer_unavailable` (503), returned by this endpoint only.
+- Nothing changes in `/v1/extract`, `/v1/documents`, `/v1/jobs` or their results (the OpenAPI schemas gain optional
+  fields only).
 
 ## 0.4.0 (2026-11-21)
 

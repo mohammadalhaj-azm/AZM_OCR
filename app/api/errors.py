@@ -26,12 +26,14 @@ CODES = {
     "unsupported_type": "not PDF, DOCX, JPG, PNG, WEBP or TIFF",
     "callback_not_allowed": "callbackUrl is not allowed: callbacks are off for this API key, or its host isn't listed",
     "invalid_request": "missing or malformed request fields",
-    "idempotency_conflict": "the Idempotency-Key was already used by this API key for a different file",
+    "idempotency_conflict": "the Idempotency-Key was already used by this API key for a different file (or, for "
+                            "/v1/extract-and-answer, other questions or options)",
     "worker_lost": "(failed jobs only) the worker processing the job died JOB_MAX_ATTEMPTS times",
     "queue_full": "MAX_QUEUED_JOBS reached; retry after Retry-After seconds",
     "busy": "EXTRACT_MAX_CONCURRENT reached (/v1/handwriting: the model is busy); retry after Retry-After seconds",
     "handwriting_unavailable": "(experimental /v1/handwriting) the handwriting model is disabled, not installed, not "
                                "downloaded or its server is unreachable",
+    "answer_unavailable": "(experimental /v1/extract-and-answer) the endpoint is disabled (ANSWER_ENABLED=false)",
     "internal_error": "processing failed (no details are returned)",
 }
 _DEFAULT_CODE = {400: "invalid_request", 401: "unauthorized", 403: "forbidden", 404: "not_found",

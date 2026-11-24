@@ -25,6 +25,13 @@ class PageResult(CamelModel):
     lines: list[OcrLine] | None = None
     width: int | None = None  # pixel size of the OCR'd image
     height: int | None = None
+    # Set by an `inspect` hook of `extract` (extract-and-answer routing): what the hook returned for this page's
+    # image and OCR output. Never serialized.
+    _inspection: Any = PrivateAttr(default=None)
+
+    @property
+    def inspection(self):
+        return self._inspection
 
 
 class ExtractionResult(CamelModel):

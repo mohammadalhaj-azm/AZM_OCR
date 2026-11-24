@@ -169,6 +169,26 @@ in `admins.yaml` later needs no restart, because the file is re-read when it cha
 **Stop the EC2 instance** when you are not testing: a running g6 costs money every hour. A stopped instance only costs
 its disk. The data, models and `.env` survive a stop and start. The public IP changes unless you attach an Elastic IP.
 
+## 10. First run of extract-and-answer (experimental)
+
+None of this has run on a GPU yet. After `docker compose up -d` with the new code (Ollama is recreated, because
+`OLLAMA_CONTEXT_LENGTH` was added):
+1. Send one printed and one handwritten document to `POST /v1/extract-and-answer` with a question each, and fetch the
+   results with `GET /v1/jobs/<jobId>?wait=30` (README, "Extract and answer").
+2. While they run: `docker compose exec ollama ollama ps`. CONTEXT should be 16384 and PROCESSOR `100% GPU`. A
+   CPU/GPU split means VRAM is short (sherif-v3, Paddle and qwen3 share the L4): check `nvidia-smi`, then lower
+   `OLLAMA_CONTEXT_LENGTH` (and `ANSWER_CHUNK_CHARS` / `ANSWER_CONTEXT_CHARS` with it).
+3. In the results, check `correction.status` (`done`) and that no `review` item says the output was cut off. If the
+   text model fails on long pages, lower `ANSWER_CHUNK_CHARS`.
+4. Calibrate the routing on 20+ labeled pages of your own (README, "Calibrate the routing"). `eval/` is not in the
+   image, so mount it with the samples (the output folder must be writable by the container's `app` user):
+   ```bash
+   docker compose run --rm --no-deps -v "$PWD/eval:/app/eval:ro" -v /home/ubuntu/routing-samples:/samples \
+     app uv run --no-sync python -m eval.run_routing_eval /samples --vision --out /samples/out
+   ```
+   Then set the `ROUTING_*` values in `.env` from `/home/ubuntu/routing-samples/out/report.md`. (Not tried on the
+   server yet: if the mount or permissions fail, paste the error.)
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -177,7 +197,8 @@ its disk. The data, models and `.env` survive a stop and start. The public IP ch
 | app keeps restarting | `docker compose logs app`: the "refusing to start" line lists every unsafe setting |
 | `/health` 503, `textModel: false` | Ollama models missing (step 5 `ollama-pull`), or Ollama still starting |
 | `/v1/handwriting` 503 `handwriting_unavailable` | The message says why. `modelDownloaded: false` means run `handwriting-pull`. "no CUDA device" means the app container has no GPU: check `COMPOSE_FILE` in `.env` and `docker compose config` |
-| `ollama ps` shows CPU or a split | Not enough free VRAM: check `nvidia-smi`; keep `OLLAMA_MAX_LOADED_MODELS=1` |
+| `ollama ps` shows CPU or a split | Not enough free VRAM: check `nvidia-smi`; keep `OLLAMA_MAX_LOADED_MODELS=1`; lower `OLLAMA_CONTEXT_LENGTH` |
+| extract-and-answer: `correction.status` `unavailable`, review says the text model failed | `docker compose logs app` for `llm page_correction ... ok=False`. A reply cut off at `ANSWER_MAX_TOKENS`: lower `ANSWER_CHUNK_CHARS`. Timeouts: raise `ANSWER_TIMEOUT_S` |
 | Build fails | Paste the error. The Docker files haven't been built on a GPU host before this deployment |
 | `ImportError: libcuda.so.1` | The GPU build of Paddle was imported in a container without a GPU. At runtime: the app container has no GPU (check `COMPOSE_FILE` and `docker compose config`). `OCR_DEVICE=cpu` doesn't avoid it in the GPU image |
 | Log says `OCR models loaded on cpu` | The container sees no GPU (same checks as for "no CUDA device" above), or the image was built without `PADDLE_GPU`: rebuild with `docker compose build` |

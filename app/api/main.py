@@ -21,7 +21,7 @@ from app.api import audit, errors, middleware, webhook
 from app.api.clients import load_clients
 from app.api.deps import max_request_bytes
 from app.api.metrics import Metrics
-from app.api.routes import documents, extract, handwriting, health, jobs
+from app.api.routes import answer, documents, extract, handwriting, health, jobs
 from app.api.store import JobStore, make_store
 from app.api.worker import AnalyzeFn, Worker
 from app.config import Settings, get_settings
@@ -76,6 +76,8 @@ def create_app(settings: Settings | None = None, services: Any = None, analyze_f
         svc = services or Services.create(settings)
         if hasattr(svc, "report_fallbacks"):
             svc.report_fallbacks(on_fallback)
+        if hasattr(svc, "handwriting") and svc.handwriting is None:
+            svc.handwriting = hw  # extract-and-answer reads handwritten pages with the same model instance
         client = httpx.Client(timeout=settings.webhook_timeout_s, transport=webhook_transport)
         dispatcher = webhook.Dispatcher(store, client, clients, settings, metrics)  # sends due webhooks from the store
         worker = Worker(settings, store, analyze_fn, svc, dispatcher, metrics)
@@ -114,6 +116,7 @@ def create_app(settings: Settings | None = None, services: Any = None, analyze_f
     app.include_router(documents.router, max_body_size=max_body)
     app.include_router(extract.router, max_body_size=max_body)
     app.include_router(handwriting.router, max_body_size=max_body)  # experimental
+    app.include_router(answer.router, max_body_size=max_body)  # experimental
     app.include_router(jobs.router)
     app.include_router(health.router)
     app.include_router(handwriting.status_router)
