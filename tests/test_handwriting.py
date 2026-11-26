@@ -14,7 +14,7 @@ from app.api.main import create_app
 from app.config import ConfigError
 from app.extractors.filetype import PNG, FileRejected
 from app.extractors.pdf import render_pdf_pages
-from app.handwriting import HandwritingService, HandwritingUnavailable
+from app.handwriting import HandwritingBusy, HandwritingService, HandwritingUnavailable
 from app.handwriting.backends import (
     DEFAULT_PROMPT,
     HwOutput,
@@ -432,3 +432,43 @@ def test_render_pdf_pages_ignores_the_text_layer():
     with pytest.raises(FileRejected) as e:
         render_pdf_pages(b"%PDF-1.4 broken", dpi=100, max_pages=5)
     assert e.value.code == "corrupt"
+
+
+def test_more_than_one_slot_needs_a_batching_server(tmp_path):
+    with pytest.raises(ConfigError, match="HANDWRITING_MAX_CONCURRENT > 1 needs HANDWRITING_BACKEND=openai"):
+        service(tmp_path, handwriting_max_concurrent=2)
+    with pytest.raises(ConfigError, match="HANDWRITING_MAX_CONCURRENT must be at least 1"):
+        service(tmp_path, handwriting_max_concurrent=0)
+    service(tmp_path, handwriting_max_concurrent=4, handwriting_backend="openai", handwriting_base_url="http://hw")
+
+
+def test_slots_let_that_many_pages_through_and_no_more(tmp_path):
+    import threading
+
+    gate, inside = threading.Event(), []
+
+    class Slow(StubBackend):
+        def transcribe(self, img):
+            inside.append(1)
+            gate.wait(5)
+            return super().transcribe(img)
+
+    svc = service(tmp_path, backend=Slow(), handwriting_max_concurrent=2, handwriting_backend="openai",
+                  handwriting_base_url="http://hw", handwriting_blank_check=False)
+    page = np.full((60, 60, 3), 255, np.uint8)
+    threads = [threading.Thread(target=svc.transcribe_image, args=(page,)) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for _ in range(100):
+        if len(inside) == 2:
+            break
+        threading.Event().wait(0.02)
+    assert len(inside) == 2  # two pages at the model at the same time
+    st = svc.status()
+    assert st["busy"] is True and st["slots"] == {"size": 2, "inUse": 2}
+    with pytest.raises(HandwritingBusy):  # a third waits for a slot, then gives up
+        svc.transcribe_image(page, wait_s=0.05)
+    gate.set()
+    for t in threads:
+        t.join(5)
+    assert svc.status()["slots"] == {"size": 2, "inUse": 0} and svc.status()["busy"] is False

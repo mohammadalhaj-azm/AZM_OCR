@@ -1,0 +1,138 @@
+# Many simultaneous requests on one NVIDIA GPU (48 GB class): vLLM instead of Ollama and the in-process handwriting
+# model. Adds to docker-compose.yml + docker-compose.gpu.yml. Put this line in .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml:docker-compose.vllm.yml
+#
+#   docker compose build
+#   docker compose --profile setup run --rm handwriting-pull   # one-time: handwriting model (needs internet)
+#   docker compose --profile setup run --rm vllm-pull          # one-time: VLLM_LLM_MODEL (needs internet)
+#   docker compose up -d
+#
+# Why: Ollama keeps one model loaded and answers requests mostly one after another, and the in-process handwriting
+# model reads one page at a time. vLLM batches the requests that arrive together (continuous batching), so 10 jobs
+# share the GPU instead of waiting in line.
+#
+# Two vLLM servers:
+#   vllm-hw   the handwriting model (sherif-v3, Qwen2.5-VL-3B), bf16
+#   vllm-llm  Qwen3-VL-8B-Instruct: page routing (vision) AND correction + Q&A (text). One model for both, so there
+#             is no loading/unloading between them and one memory pool fewer.
+# Ollama is not started (it stays the setup for development and CPU machines).
+#
+# GPU MEMORY, NOT COMPUTE: VLLM_*_GPU_MEM reserves a share of the GPU's *memory* (weights + KV cache) when the server
+# starts. It does not split the GPU's compute: all processes share the cores, and a server with no work uses none.
+# When PaddleOCR has many pages and the models are idle, PaddleOCR gets (almost) the whole GPU. The memory not
+# reserved by vLLM stays free for PaddleOCR (FLAGS_allocator_strategy=auto_growth, docker-compose.gpu.yml).
+# Defaults for a 48 GB card (estimates, NOT measured; check `nvidia-smi` and each server's "KV cache" startup log
+# line):
+#   vllm-hw  0.25 x 48 GB = 12 GB: ~7.5 GB weights, the rest KV cache (~8 pages at ~7.5k tokens at once)
+#   vllm-llm 0.55 x 48 GB = 26 GB: ~17.5 GB weights (bf16), ~7 GB KV cache
+#   left:    ~9.5 GB for PaddleOCR and the CUDA contexts
+# On a card that supports FP8 (L40S, RTX 6000 Ada, H100; NOT A6000 / A100): VLLM_LLM_MODEL=Qwen/Qwen3-VL-8B-Instruct-FP8
+# halves the LLM's weights; keep VLLM_LLM_GPU_MEM and the freed memory becomes KV cache (more requests at once).
+#
+# The two servers start one after the other (vLLM measures free memory at startup; two at once miscount it).
+# Not run on a GPU yet: check `docker compose logs vllm-hw vllm-llm` on the first start.
+
+x-vllm: &vllm
+  image: vllm/vllm-openai:${VLLM_IMAGE_TAG:-v0.32.0}
+  entrypoint: ["vllm", "serve"]
+  environment:
+    HF_HOME: /opt/hf
+    HF_HUB_OFFLINE: "1"
+    HF_HUB_DISABLE_TELEMETRY: "1"
+    VLLM_NO_USAGE_STATS: "1"
+    DO_NOT_TRACK: "1"
+  volumes:
+    - hf-models:/opt/hf
+  shm_size: 4gb
+  networks: [internal]  # no internet route at runtime
+  restart: unless-stopped
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+  vllm-hw:
+    <<: *vllm
+    command:
+      - ${HANDWRITING_MODEL:-sherif1313/Arabic-English-handwritten-OCR-v3}
+      - --host=0.0.0.0
+      - --port=8000
+      - --dtype=bfloat16
+      - --gpu-memory-utilization=${VLLM_HW_GPU_MEM:-0.25}
+      - --max-model-len=${VLLM_HW_MAX_LEN:-12288}
+      - --max-num-seqs=${VLLM_HW_MAX_SEQS:-8}
+      # never the model repo's generation_config.json (it turns sampling on); the app also sends temperature 0
+      - --generation-config=vllm
+      - '--limit-mm-per-prompt={"image": 1, "video": 0}'
+      # The image size is set by the app: it uploads each page at HANDWRITING_MAX_SIDE (2400 px: an A4 page at ~200
+      # DPI, what the model card asks for; ~5,200 visual tokens). VLLM_HW_MAX_LEN must hold those tokens plus
+      # HANDWRITING_MAX_NEW_TOKENS: raise it with HANDWRITING_MAX_SIDE.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 90
+      start_period: 120s
+
+  vllm-llm:
+    <<: *vllm
+    command:
+      - ${VLLM_LLM_MODEL:-Qwen/Qwen3-VL-8B-Instruct}
+      - --served-model-name=${VLLM_LLM_NAME:-qwen3-vl-8b-instruct}
+      - --host=0.0.0.0
+      - --port=8000
+      - --gpu-memory-utilization=${VLLM_LLM_GPU_MEM:-0.55}
+      - --max-model-len=${VLLM_LLM_MAX_LEN:-32768}
+      - --max-num-seqs=${VLLM_LLM_MAX_SEQS:-16}
+      - --generation-config=vllm
+      - '--limit-mm-per-prompt={"image": 1, "video": 0}'
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 90
+      start_period: 120s
+    depends_on:
+      vllm-hw:
+        condition: service_healthy
+
+  ollama:
+    profiles: [ollama]  # not started with this file (`--profile ollama` would start it anyway)
+
+  app:
+    # Only the wiring to the two servers is set here (it must match them; these values win over .env). How much runs
+    # at once and at which resolution stays in .env: `python3 scripts/make_env.py --vllm` writes those values for a
+    # new .env; for an existing .env, docs/DEPLOY-EC2.md ("Many requests at once: vLLM") lists the lines to change.
+    environment:
+      LLM_BASE_URL: http://vllm-llm:8000/v1
+      LLM_VISION_BASE_URL: ""  # the same server answers the vision (routing) requests
+      LLM_TEXT_MODEL: ${VLLM_LLM_NAME:-qwen3-vl-8b-instruct}
+      LLM_VISION_MODEL: ${VLLM_LLM_NAME:-qwen3-vl-8b-instruct}
+      ANSWER_LLM_MODEL: ""
+      LLM_EXTRA_BODY: "{}"  # Qwen3-VL Instruct has no thinking mode to switch off
+      HANDWRITING_BACKEND: openai
+      HANDWRITING_BASE_URL: http://vllm-hw:8000/v1
+      HANDWRITING_MODEL: ${HANDWRITING_MODEL:-sherif1313/Arabic-English-handwritten-OCR-v3}  # the served name
+    depends_on:
+      ollama:
+        condition: service_started
+        required: false
+      vllm-llm:
+        condition: service_healthy
+
+  # One-time download of VLLM_LLM_MODEL into the hf-models volume (the handwriting model: `handwriting-pull`).
+  vllm-pull:
+    image: vllm/vllm-openai:${VLLM_IMAGE_TAG:-v0.32.0}
+    profiles: [setup]
+    entrypoint: ["python3", "-c", "import os, huggingface_hub as h; h.snapshot_download(os.environ['MODEL'])"]
+    environment:
+      HF_HOME: /opt/hf
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      MODEL: ${VLLM_LLM_MODEL:-Qwen/Qwen3-VL-8B-Instruct}
+    volumes:
+      - hf-models:/opt/hf
+    networks: [edge]

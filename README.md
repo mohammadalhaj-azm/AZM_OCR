@@ -861,6 +861,10 @@ don't rely on it until these steps pass:
    the same or the CER within noise.
 3. Then record the exact vLLM version and command here.
 
+`docker-compose.vllm.yml` runs this model (and Qwen3-VL-8B for routing, correction and Q&A) with vLLM on one GPU,
+for many requests at once: [docs/DEPLOY-EC2.md](docs/DEPLOY-EC2.md), section 11. With the openai backend,
+`HANDWRITING_MAX_CONCURRENT` pages go to the model at once (the in-process backend: always 1).
+
 ## Extract and answer (experimental)
 
 `POST /v1/extract-and-answer` combines both OCR engines and the local text LLM in one **async job** (same queue,
@@ -986,6 +990,9 @@ curl http://127.0.0.1:8000/health
 - These files were written without Docker available on the development machine, so **run the build once** on the target host.
 
 ## Switching the LLM to vLLM on a GPU server
+
+Ready-made for one GPU with Docker Compose: `docker-compose.vllm.yml` ([docs/DEPLOY-EC2.md](docs/DEPLOY-EC2.md),
+section 11). The manual way:
 
 The service only talks to an OpenAI-compatible API, so switching is configuration only. vLLM serves one
 model per server, so run one for text and (optionally) one for vision:

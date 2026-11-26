@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     handwriting_base_url: str = ""  # openai backend, e.g. http://gpu-server:8002/v1
     handwriting_api_key: str = ""
     handwriting_timeout_s: float = 600.0  # per page (openai backend)
+    # Pages at the model at once, across all requests and jobs. openai backend (vLLM batches them on the GPU): e.g. 8.
+    # transformers backend: 1 (the only allowed value; the in-process model reads one page at a time).
+    handwriting_max_concurrent: int = 1
     handwriting_device: Literal["auto", "cpu", "cuda"] = "auto"  # transformers backend; auto = cuda if available
     handwriting_dtype: Literal["auto", "float32", "bfloat16", "float16"] = "auto"  # auto = bf16 on cuda, fp32 on cpu
     # Cap on the image size the model sees (pixels; 28x28 = one visual token). The main speed lever on CPU. The
@@ -127,6 +130,9 @@ class Settings(BaseSettings):
     # Page text is corrected in chunks of at most this many characters (Ollama's context window is set on the server,
     # OLLAMA_CONTEXT_LENGTH, and silently truncates longer input)
     answer_chunk_chars: int = 3000
+    # Correction calls of one job sent at once (page chunks). 1 = one after another. With vLLM (continuous batching)
+    # e.g. 4; with Ollama it only helps if OLLAMA_NUM_PARALLEL allows it. The result is the same in any case.
+    answer_llm_concurrency: int = Field(1, ge=1, le=32)
     answer_context_chars: int = 20000  # questions are answered from at most this much (corrected) text
     answer_keep_max_side: int = 2000  # page images kept for the handwriting model / vision are downscaled to this
     # Routing of scanned pages and images. STARTING VALUES, NOT CALIBRATED: measure them on your own documents with

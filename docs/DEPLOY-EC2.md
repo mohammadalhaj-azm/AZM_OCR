@@ -189,6 +189,99 @@ None of this has run on a GPU yet. After `docker compose up -d` with the new cod
    Then set the `ROUTING_*` values in `.env` from `/home/ubuntu/routing-samples/out/report.md`. (Not tried on the
    server yet: if the mount or permissions fail, paste the error.)
 
+## 11. Many requests at once: vLLM (48 GB GPU)
+
+With Ollama and the in-process handwriting model, jobs run **one after another**. Ten jobs sent together all succeed,
+but the tenth waits for the nine before it. Ollama keeps one model loaded and swaps between `qwen3-vl` (routing) and
+`qwen3` (correction, Q&A), and the handwriting model reads one page at a time. `docker-compose.vllm.yml` replaces
+both with two vLLM servers, which batch the requests that arrive together on the GPU:
+
+| Server | Model | Used for |
+|---|---|---|
+| `vllm-hw` | `sherif1313/Arabic-English-handwritten-OCR-v3` (bf16) | handwriting |
+| `vllm-llm` | `Qwen/Qwen3-VL-8B-Instruct` (bf16) | page routing (vision) **and** correction + Q&A (text) |
+
+The app also works on several jobs, pages and correction chunks at once (`WORKER_THREADS` / `LLM_WORKER_THREADS`,
+`HANDWRITING_MAX_CONCURRENT`, `ANSWER_LLM_CONCURRENCY`). The result of a job is the same either way; only the speed
+changes.
+
+Note: correction and Q&A now use Qwen3-VL-8B instead of qwen3:8b. Three servers in bf16 (handwriting + qwen3-vl +
+qwen3) don't fit in 48 GB next to PaddleOCR. A separate, larger text model is a later step.
+
+**Not run on a GPU yet.** Check each step's output.
+
+### GPU memory, not compute
+
+`VLLM_HW_GPU_MEM` / `VLLM_LLM_GPU_MEM` reserve a share of the GPU's **memory** for each server (its weights and its
+KV cache, the memory for requests in progress) when it starts. They **do not split the GPU's compute**: all
+processes share the cores, and a server with nothing to do uses none. When PaddleOCR has many pages and the models
+are idle, PaddleOCR gets (almost) the whole GPU. Memory that vLLM does not reserve stays free for PaddleOCR, which
+takes it as it needs it (`FLAGS_allocator_strategy=auto_growth`). The reservation is what lets both models stay
+loaded, without the unloading and reloading of Ollama.
+
+Starting values for a 48 GB card (estimates, **not measured**):
+
+| | share | ≈ GB | holds |
+|---|---|---|---|
+| `vllm-hw` | 0.25 | 12 | ~7.5 GB weights + KV cache for ~8 pages at once |
+| `vllm-llm` | 0.55 | 26 | ~17.5 GB weights + ~7 GB KV cache |
+| left | 0.20 | ~9.5 | PaddleOCR, CUDA contexts |
+
+On a card with FP8 (L40S, RTX 6000 Ada, H100; **not** A6000 / A100), `VLLM_LLM_MODEL=Qwen/Qwen3-VL-8B-Instruct-FP8`
+halves the LLM's weights. With the same `VLLM_LLM_GPU_MEM`, the freed memory becomes KV cache (more requests at
+once). Run `vllm-pull` again after changing the model.
+
+### Set it up
+
+1. `.env`. A new one: `python3 scripts/make_env.py --vllm`. For an existing `.env` (keep its secrets), change or add
+   these lines:
+   ```
+   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml:docker-compose.vllm.yml
+   HANDWRITING_BACKEND=openai
+   HANDWRITING_MAX_CONCURRENT=8
+   HANDWRITING_MAX_SIDE=2400
+   ANSWER_KEEP_MAX_SIDE=2400
+   HANDWRITING_MAX_NEW_TOKENS=2048
+   ANSWER_LLM_CONCURRENCY=4
+   WORKER_THREADS=4
+   LLM_WORKER_THREADS=4
+   ```
+   These are starting values (`scripts/make_env.py`, `VLLM_PRESET`). `HANDWRITING_MAX_SIDE=2400` sends a page to the
+   handwriting model at ~200 DPI (A4), which the model card asks for. The CPU default 1600 is ~130 DPI. Small
+   handwriting loses detail at that size, and the model is more likely to misread it. Optional in `.env`:
+   `VLLM_IMAGE_TAG` (default `v0.32.0`), `VLLM_LLM_MODEL`, `VLLM_HW_GPU_MEM`, `VLLM_LLM_GPU_MEM`,
+   `VLLM_HW_MAX_LEN`, `VLLM_LLM_MAX_LEN`, `VLLM_HW_MAX_SEQS`, `VLLM_LLM_MAX_SEQS`.
+2. Models (one time, needs the internet):
+   ```bash
+   docker compose build
+   docker compose --profile setup run --rm handwriting-pull   # if not done yet
+   docker compose --profile setup run --rm vllm-pull          # Qwen3-VL-8B (~17 GB)
+   ```
+3. `docker compose up -d`. `vllm-hw` starts first, then `vllm-llm`, then the app. Loading takes a few minutes, and
+   vLLM measures free memory at startup, so the two must not start at the same moment.
+4. Check:
+   ```bash
+   docker compose ps                                   # vllm-hw, vllm-llm healthy; app healthy; no ollama
+   docker compose logs vllm-hw vllm-llm | grep -iE "KV cache|error|out of memory"
+   nvidia-smi                                          # both vLLM processes + the app (PaddleOCR)
+   curl -s http://127.0.0.1:8000/health/handwriting; echo   # backend openai, reachable + modelServed true, slots
+   ```
+   The image `vllm/vllm-openai:v0.32.0` needs a recent NVIDIA driver (CUDA 13). If the container fails with a
+   CUDA/driver version error, update the driver (`bash scripts/ec2_setup.sh`), or try the CUDA 12.9 build of the
+   same version (`VLLM_IMAGE_TAG=v0.32.0-cu129`, check that the tag exists on Docker Hub).
+5. Measure with a **non-sensitive** sample document (prints numbers only; deletes the jobs):
+   ```bash
+   export OCR_API_KEY=...   # a client with the documents scope
+   docker compose exec -e OCR_API_KEY app uv run --no-sync python scripts/load_test.py /path/in/container/sample.pdf \
+       --jobs 1 10 20 --question "What is the date of the contract?"
+   ```
+   (Or run it from your laptop with `--url`; it only needs `httpx`.) Compare `end to end` p50 / p95 between rounds,
+   and with the same command on the Ollama setup. When the GPU memory peak stays well below the card, raise
+   `HANDWRITING_MAX_CONCURRENT` / `ANSWER_LLM_CONCURRENCY` / the `*_MAX_SEQS`; on out-of-memory errors lower them.
+
+Back to Ollama: remove `:docker-compose.vllm.yml` from `COMPOSE_FILE`, set `HANDWRITING_BACKEND=transformers`,
+`HANDWRITING_MAX_CONCURRENT=1`, and run `docker compose up -d --remove-orphans`.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -199,6 +292,8 @@ None of this has run on a GPU yet. After `docker compose up -d` with the new cod
 | `/v1/handwriting` 503 `handwriting_unavailable` | The message says why. `modelDownloaded: false` means run `handwriting-pull`. "no CUDA device" means the app container has no GPU: check `COMPOSE_FILE` in `.env` and `docker compose config` |
 | `ollama ps` shows CPU or a split | Not enough free VRAM: check `nvidia-smi`; keep `OLLAMA_MAX_LOADED_MODELS=1`; lower `OLLAMA_CONTEXT_LENGTH` |
 | extract-and-answer: `correction.status` `unavailable`, review says the text model failed | `docker compose logs app` for `llm page_correction ... ok=False`. A reply cut off at `ANSWER_MAX_TOKENS`: lower `ANSWER_CHUNK_CHARS`. Timeouts: raise `ANSWER_TIMEOUT_S` |
+| vLLM: `vllm-hw` / `vllm-llm` unhealthy, "out of memory" or "No available memory for the cache blocks" | The shares don't fit next to each other: lower `VLLM_*_GPU_MEM` or `VLLM_*_MAX_LEN`, or use the FP8 model (section 11). Make sure Ollama isn't running (`docker compose ps`) |
+| vLLM: a job's review says the handwriting model is busy | More pages waited than `HANDWRITING_TIMEOUT_S` allows: lower the load or raise `HANDWRITING_MAX_CONCURRENT` (with `VLLM_HW_MAX_SEQS`) |
 | Build fails | Paste the error. The Docker files haven't been built on a GPU host before this deployment |
 | `ImportError: libcuda.so.1` | The GPU build of Paddle was imported in a container without a GPU. At runtime: the app container has no GPU (check `COMPOSE_FILE` and `docker compose config`). `OCR_DEVICE=cpu` doesn't avoid it in the GPU image |
 | Log says `OCR models loaded on cpu` | The container sees no GPU (same checks as for "no CUDA device" above), or the image was built without `PADDLE_GPU`: rebuild with `docker compose build` |

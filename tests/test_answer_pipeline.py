@@ -6,6 +6,7 @@ import pytest
 
 from app.answer import TASK
 from app.config import Settings
+from app.handwriting.backends import HwOutput
 from app.pipeline import analyze, extract_stage
 from app.profiles import Profile, withhold
 from tests.fakes_answer import (
@@ -327,3 +328,57 @@ def test_handwriting_blank_but_paddle_read_text_is_flagged():
     out = analyze(png(), "doc.png", svc, task=TASK, answer={"correct": False})
     assert out["pages"][0]["readings"][0]["warnings"] == ["blank"]
     assert any("found the page blank" in it["reason"] for it in out["review"])
+
+
+def test_parallel_reading_and_correction_give_the_same_result_as_one_at_a_time():
+    """HANDWRITING_MAX_CONCURRENT / ANSWER_LLM_CONCURRENCY change the speed, never the result or its order."""
+    import io
+    import threading
+    import time
+
+    import numpy as np
+    from PIL import Image
+
+    values = [250, 240, 230, 220, 210]  # one shade per page: the stub's reading depends on the page, not on timing
+    frames = [Image.fromarray(np.full((200, 160, 3), v, np.uint8)) for v in values]
+    buf = io.BytesIO()
+    frames[0].save(buf, "TIFF", save_all=True, append_images=frames[1:])
+    data = buf.getvalue()
+    lines = [(f"Line {chr(65 + i)} " + "word " * 30, 0.97) for i in range(12)]
+    outputs = [ocr(HANDWRITTEN), ocr(lines), ocr(HANDWRITTEN), ocr(PRINTED), ocr(HANDWRITTEN)]
+
+    class PageHw(StubHw):
+        def __init__(self):
+            super().__init__()
+            self.lock, self.active, self.peak = threading.Lock(), 0, 0
+
+        def transcribe(self, img):
+            with self.lock:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+            time.sleep(0.05)
+            with self.lock:
+                self.active -= 1
+            return HwOutput(f"page shade {int(round(float(img.mean())))} ref 4471", 5, 3, "stop")
+
+    def slow_echo(user):
+        time.sleep(0.02)
+        return {"correctedText": text_of(user).replace("⟪", "").replace("⟫", "") + " .",
+                "reviewItems": [{"quote": text_of(user)[:6], "suggestion": "", "reason": "check",
+                                 "category": "ambiguous"}]}
+
+    def go(**update):
+        hw = PageHw()
+        settings = S.model_copy(update={"answer_chunk_chars": 300, **update})
+        out = run(FakeEngine(*outputs), FakeLlmServer(page_correction=slow_echo), hw, data=data, settings=settings)
+        return out, hw
+
+    one, hw1 = go()
+    many, hw4 = go(handwriting_backend="openai", handwriting_base_url="http://hw.test", handwriting_max_concurrent=3,
+                   answer_llm_concurrency=4)
+    assert hw1.peak == 1 and hw4.peak > 1  # really in parallel, and no more than the slots allow
+    assert hw4.peak <= 3
+    for key in ("pages", "review", "correctedText", "routing", "correction", "fullText"):
+        assert many[key] == one[key], key
+    assert [p["page"] for p in many["pages"]] == [1, 2, 3, 4, 5]
+    assert many["pages"][0]["text"] == "page shade 250 ref 4471" and many["pages"][4]["text"].endswith("210 ref 4471")

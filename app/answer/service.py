@@ -6,23 +6,28 @@ Two stages, like the main pipeline (the job worker can run them on different thr
     1. `extract` as for /v1/documents: text layers taken as they are, everything else OCR'd by PaddleOCR. An
        `inspect` hook keeps PaddleOCR's signals per page (and the page image where another engine may need it).
     2. Per page, a route (app/answer/routing.py): the signals, else the vision model, else the configured fallback
-       (marked `uncertain`). Pages routed to handwriting are read by the handwriting model (one at a time); for
-       handwritten and mixed pages PaddleOCR's reading is kept next to it.
+       (marked `uncertain`). Pages routed to handwriting are read by the handwriting model, up to
+       HANDWRITING_MAX_CONCURRENT pages at once (vLLM); for handwritten and mixed pages PaddleOCR's reading is kept
+       next to it.
     3. Review items that need no model: low-confidence lines, handwriting warnings, uncertain routes, protected
        values that the two readings of a page disagree on, engines that were unavailable.
 
 `finish` (stage 2: LLM)
-    4. Correction, per page chunk, with protected values masked (app/answer/guards.py). A chunk whose reply breaks a
-       protected value keeps its original text and is flagged ("restore + flag").
+    4. Correction, per page chunk (ANSWER_LLM_CONCURRENCY chunks at once), with protected values masked
+       (app/answer/guards.py). A chunk whose reply breaks a protected value keeps its original text and is flagged
+       ("restore + flag"). Parallel or not, the result is assembled in page and chunk order.
     5. Questions, from the corrected text, with citations checked against the pages.
 
 The text model failing never fails the job: the result says what is missing (`correction.status`, answer
 `status: unavailable`). Holds document text: never log it.
 """
 
+import contextvars
 import time
+from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, TypeVar
 
 import cv2
 import numpy as np
@@ -51,6 +56,8 @@ TASK = "extract_and_answer"
 Mode = Literal["auto", "printed", "handwritten"]
 MAX_OCR_REVIEW_ITEMS = 20  # low-confidence lines reported per page
 MAX_DISAGREEMENTS = 10
+T = TypeVar("T")
+R = TypeVar("R")
 NOT_FOUND = {"ar": "لا يحتوي المستند على هذه المعلومة.", "en": "The document does not contain this information."}
 
 
@@ -87,6 +94,18 @@ def shrink(img: np.ndarray, max_side: int) -> np.ndarray:
         return img
     f = max_side / max(h, w)
     return cv2.resize(img, (max(1, round(w * f)), max(1, round(h * f))), interpolation=cv2.INTER_AREA)
+
+
+def ordered_map(fn: Callable[[T], R], items: Iterable[T], workers: int, name: str) -> list[R]:
+    """[fn(x) for x in items], on up to `workers` threads, results in input order. Each task runs in a copy of the
+    caller's context, so its log lines keep the job's ids (app/logs.py). An exception is raised as in the loop."""
+    items = list(items)
+    workers = min(max(1, workers), len(items))
+    if workers <= 1:
+        return [fn(x) for x in items]
+    with ThreadPoolExecutor(workers, thread_name_prefix=name) as pool:
+        futures = [pool.submit(contextvars.copy_context().run, fn, x) for x in items]
+        return [f.result() for f in futures]
 
 
 def make_inspector(s: Settings, mode: Mode):
@@ -133,6 +152,7 @@ def extract_routed(data: bytes, svc, settings: Settings, options: AnswerOptions 
     t = {"routing": 0.0, "handwriting": 0.0}
     hw_pages = 0
     routed = Routed(opts, [], {})
+    to_read = []  # (index in routed.pages, page, route, image)
     for p in ex.pages:
         if p.method == "text_layer":
             routed.pages.append(_text_layer_page(p))
@@ -140,13 +160,19 @@ def extract_routed(data: bytes, svc, settings: Settings, options: AnswerOptions 
         t0 = time.perf_counter()
         route, image = _route(p, s, opts, alm, vision, svc, routed)
         t["routing"] += time.perf_counter() - t0
-        t0 = time.perf_counter()
-        page, used_hw = _read(p, route, image, s, hw)
+        to_read.append((len(routed.pages), p, route, image))
+        routed.pages.append(None)
+    # The pages are read in parallel: the handwriting service's slots bound how many reach the model at once, across
+    # all jobs. Paddle-only pages cost nothing here (PaddleOCR already ran in `extract`).
+    t0 = time.perf_counter()
+    workers = s.handwriting_max_concurrent if hw is not None and getattr(hw, "enabled", False) else 1
+    read = ordered_map(lambda it: _read(it[1], it[2], it[3], s, hw), to_read, workers, "answer-read")
+    for (i, *_), (page, used_hw) in zip(to_read, read):
+        routed.pages[i] = page
         if used_hw:
             hw_pages += 1
             routed.handwriting = hw.model_info()
-        t["handwriting"] += time.perf_counter() - t0
-        routed.pages.append(page)
+    t["handwriting"] = time.perf_counter() - t0
     routed.timings = {"routing": round(t["routing"] * 1000), "handwriting": round(t["handwriting"] * 1000),
                       "handwritingPages": hw_pages}
     return ex, routed
@@ -344,46 +370,59 @@ def finish(ex: ExtractionResult, routed: Routed, svc, settings: Settings, includ
     return out
 
 
+def _correct_chunk(p: dict, chunk: str, alm: AnswerLlm) -> tuple[str, list[dict], bool]:
+    """One chunk of a page: (text, review items, whether the model answered). Thread-safe (no shared state)."""
+    s = alm.s
+    review: list[dict] = []
+    original = guards.strip_low_marks(chunk)
+    masked, values = guards.mask(chunk)
+    ref = (p["_reference"] or "")[:s.answer_chunk_chars] or None  # not masked: it is never copied
+    try:
+        c = alm.correct(masked, p["engine"], p["readings"][0]["warnings"], ref)
+    except LlmError:
+        review.append(_item(p["page"], "the text model failed: this part was not corrected", "unavailable", "llm"))
+        return original, review, False
+    # the model answered; a reply that breaks a protected value is restored, not a failure
+    problem = guards.check_placeholders(c.text, values)
+    if problem:
+        text = original
+        review.append(_item(p["page"], f"{problem}: this part keeps its original text", "protected_value",
+                            "protected_value"))
+    else:
+        text = guards.strip_low_marks(guards.unmask(c.text, values)).strip()
+    for it in c.review:
+        quote = guards.strip_low_marks(guards.unmask(it["quote"], values)).strip()
+        suggestion = it["suggestion"]
+        if suggestion is not None:
+            suggestion = guards.strip_low_marks(guards.unmask(suggestion, values))
+            if guards.PLACEHOLDER.search(suggestion):
+                suggestion = None  # it referred to a value we can't map back
+        review.append(_item(p["page"], it["reason"] or "flagged by the text model", it["category"], "llm",
+                            quote=quote or None, suggestion=suggestion,
+                            located=guards.located(quote, original) if quote else None))
+    return text, review, True
+
+
 def _correct_all(pages: list[dict], alm: AnswerLlm, review: list[dict], svc) -> dict:
     s = alm.s
-    ok = failed = 0
+    tasks = []  # (page, chunk) in page and chunk order
     for p in pages:
         if not p["text"].strip():
             p["correctedText"], p["changes"] = p["text"], []
             continue
-        out_chunks = []
-        for chunk in guards.chunks(p["_marked"], s.answer_chunk_chars):
-            original = guards.strip_low_marks(chunk)
-            masked, values = guards.mask(chunk)
-            ref = (p["_reference"] or "")[:s.answer_chunk_chars] or None  # not masked: it is never copied
-            try:
-                c = alm.correct(masked, p["engine"], p["readings"][0]["warnings"], ref)
-            except LlmError:
-                failed += 1
-                out_chunks.append(original)
-                review.append(_item(p["page"], "the text model failed: this part was not corrected", "unavailable",
-                                    "llm"))
-                continue
-            ok += 1  # the model answered; a reply that breaks a protected value is restored, not a failure
-            problem = guards.check_placeholders(c.text, values)
-            if problem:
-                out_chunks.append(original)
-                review.append(_item(p["page"], f"{problem}: this part keeps its original text", "protected_value",
-                                    "protected_value"))
-            else:
-                out_chunks.append(guards.strip_low_marks(guards.unmask(c.text, values)).strip())
-            for it in c.review:
-                quote = guards.strip_low_marks(guards.unmask(it["quote"], values)).strip()
-                suggestion = it["suggestion"]
-                if suggestion is not None:
-                    suggestion = guards.strip_low_marks(guards.unmask(suggestion, values))
-                    if guards.PLACEHOLDER.search(suggestion):
-                        suggestion = None  # it referred to a value we can't map back
-                review.append(_item(p["page"], it["reason"] or "flagged by the text model", it["category"], "llm",
-                                    quote=quote or None, suggestion=suggestion,
-                                    located=guards.located(quote, original) if quote else None))
-        p["correctedText"] = "\n".join(c for c in out_chunks if c)
-        p["changes"] = guards.word_changes(p["text"], p["correctedText"])
+        tasks += [(p, chunk) for chunk in guards.chunks(p["_marked"], s.answer_chunk_chars)]
+    results = ordered_map(lambda t: _correct_chunk(t[0], t[1], alm), tasks, s.answer_llm_concurrency,
+                          "answer-correct")
+    ok = failed = 0
+    by_page: dict[int, list[str]] = {}
+    for (p, _), (text, items, answered) in zip(tasks, results):
+        ok, failed = ok + answered, failed + (not answered)
+        by_page.setdefault(id(p), []).append(text)
+        review.extend(items)
+    for p in pages:
+        if id(p) in by_page:
+            p["correctedText"] = "\n".join(c for c in by_page[id(p)] if c)
+            p["changes"] = guards.word_changes(p["text"], p["correctedText"])
     if failed:
         _fallback(svc, "answer_llm")
     status = "done" if not failed else ("partial" if ok else "unavailable")

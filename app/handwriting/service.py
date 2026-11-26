@@ -23,7 +23,33 @@ ACCEPTED = IMAGE_TYPES | {PDF}
 
 
 class HandwritingBusy(RuntimeError):
-    """The model is already transcribing another request (one at a time)."""
+    """Every slot of the model is taken (HANDWRITING_MAX_CONCURRENT pages at a time)."""
+
+
+class Slots:
+    """At most `size` pages at the model at once, across all requests and jobs of this process. A semaphore that also
+    says how many slots are taken (health / admin dashboard)."""
+
+    def __init__(self, size: int):
+        self.size = max(1, size)
+        self._sem = threading.BoundedSemaphore(self.size)
+        self._lock = threading.Lock()
+        self.in_use = 0
+
+    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
+        got = self._sem.acquire(True, timeout) if blocking else self._sem.acquire(False)
+        if got:
+            with self._lock:
+                self.in_use += 1
+        return got
+
+    def release(self) -> None:
+        with self._lock:
+            self.in_use -= 1
+        self._sem.release()
+
+    def full(self) -> bool:
+        return self.in_use >= self.size
 
 
 def config_problems(s: Settings) -> list[str]:
@@ -36,6 +62,11 @@ def config_problems(s: Settings) -> list[str]:
             problems.append(f"{name.upper()} must be positive")
     if s.handwriting_min_pixels > s.handwriting_max_pixels:
         problems.append("HANDWRITING_MIN_PIXELS must not exceed HANDWRITING_MAX_PIXELS")
+    if s.handwriting_max_concurrent < 1:
+        problems.append("HANDWRITING_MAX_CONCURRENT must be at least 1")
+    elif s.handwriting_max_concurrent > 1 and s.handwriting_backend != "openai":
+        # the in-process model reads one page at a time; parallel pages need a server that batches them (vLLM)
+        problems.append("HANDWRITING_MAX_CONCURRENT > 1 needs HANDWRITING_BACKEND=openai (e.g. vLLM)")
     if s.handwriting_repetition_penalty < 1:
         problems.append("HANDWRITING_REPETITION_PENALTY must be >= 1")
     if not 0 <= s.handwriting_blank_ink_ratio < 1:
@@ -58,7 +89,7 @@ class HandwritingService:
             raise ConfigError("handwriting configuration is invalid: " + "; ".join(problems))
         self.backend = backend or (make_backend(settings) if self.enabled else None)
         self.segmenter = segmenter or make_segmenter(settings.handwriting_segmenter)
-        self._slot = threading.Lock()
+        self._slot = Slots(settings.handwriting_max_concurrent)
 
     def close(self) -> None:
         close = getattr(self.backend, "close", None)
@@ -75,7 +106,8 @@ class HandwritingService:
     def status(self) -> dict:
         if not self.enabled:
             return {"enabled": False}
-        return {"enabled": True, "segmenter": self.segmenter.name, "busy": self._slot.locked(),
+        return {"enabled": True, "segmenter": self.segmenter.name, "busy": self._slot.full(),
+                "slots": {"size": self._slot.size, "inUse": self._slot.in_use},
                 **self.backend.status()}
 
     def pages(self, data: bytes, mime: str) -> list[np.ndarray]:
@@ -85,7 +117,7 @@ class HandwritingService:
 
     def transcribe(self, data: bytes, mime: str) -> dict:
         """The result dict of POST /v1/handwriting (without `file.name`). Raises HandwritingUnavailable,
-        HandwritingBusy or FileRejected."""
+        HandwritingBusy (no free slot right now) or FileRejected. Takes one slot for the whole file."""
         if not self.enabled or self.backend is None:
             raise HandwritingUnavailable("handwriting OCR is disabled (HANDWRITING_ENABLED=false)")
         if mime not in ACCEPTED:
@@ -114,8 +146,9 @@ class HandwritingService:
 
     def transcribe_image(self, img: np.ndarray, wait_s: float | None = None) -> dict:
         """One page image (BGR), for the main pipeline (extract-and-answer jobs): {text, confidence (null), ms,
-        skipped, warnings}. Unlike `transcribe`, it waits for the one-at-a-time slot, at most `wait_s` seconds
-        (None = HANDWRITING_TIMEOUT_S). Raises HandwritingUnavailable or HandwritingBusy (waited too long)."""
+        skipped, warnings}. Unlike `transcribe`, it waits for a free slot, at most `wait_s` seconds
+        (None = HANDWRITING_TIMEOUT_S). Thread-safe: extract-and-answer reads several pages at once.
+        Raises HandwritingUnavailable or HandwritingBusy (waited too long)."""
         if not self.enabled or self.backend is None:
             raise HandwritingUnavailable("handwriting OCR is disabled (HANDWRITING_ENABLED=false)")
         if not self._slot.acquire(timeout=self.s.handwriting_timeout_s if wait_s is None else wait_s):

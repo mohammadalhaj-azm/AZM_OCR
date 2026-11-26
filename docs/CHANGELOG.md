@@ -21,6 +21,8 @@ Changes that client systems can see. The API contract is `/v1`, and within it ch
 - New error code `answer_unavailable` (503), returned by this endpoint only.
 - Nothing changes in `/v1/extract`, `/v1/documents`, `/v1/jobs` or their results (the OpenAPI schemas gain optional
   fields only).
+- `GET /health/handwriting` also reports `slots: {size, inUse}`: how many pages the handwriting model may read at
+  once on this server, and how many it is reading now. `busy` is true when all slots are taken.
 
 ## 0.4.0 (2026-11-21)
 
